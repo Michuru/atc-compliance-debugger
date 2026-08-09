@@ -325,6 +325,35 @@ const RE_PLAYER_ACTION = /\[PlayerAction\]/;
 // descent" prompt for the same event by the absence of that leading verb.
 const RE_PILOT_SELF_REPORT = /\bready for (descent|departure)\b/i;
 const RE_ATC_SELF_REPORT_PROMPT = /\breport\s+ready for (descent|departure)\b/i;
+// Same misclassification, wider family: "request IFR clearance", "request
+// pushback", "request taxi", "request direct to fix", "request altitude
+// change", "request approach change", etc - the whole family of
+// self-initiated CPDLC/menu-driven requests, all of which lead with the
+// callsign the same way "ready for descent" does. The comment above already
+// noted `KADS Departure doesnt work.txt`'s "request direct to fix" as a
+// confirmed symptom of this same bug, but only the tag-based fix
+// (RE_PLAYER_ACTION) covered it at the time - the content fallback stayed
+// scoped to ready-for-descent/departure specifically. Several real logs
+// (`Player.log`, `Player - recent.log`, `2026-08-03(EIDW-EGNT).log`,
+// `2026-07-19(EGAA-EGNV)dd.log`, `Player - visual example.log`, and others)
+// have NO [PlayerAction] tags anywhere in the file at all (an older log
+// format/session setting, not a parsing failure), leaving every one of
+// these requests with zero fallback protection - confirmed via a direct
+// initApp() load of `Player.log`, where "Speedbird 1 Heavy, request direct
+// to fix." (appears 6 times) was misclassified as ATC, corroborated by the
+// surrounding [CPDLC] AICommunicationSystem.RequestDirectToFixEvaluatorScript
+// lines confirming it's genuinely the player's own automated request.
+// Unlike ready-for-descent, this one needs no ATC-prompt exclusion regex:
+// an exhaustive grep of every real [Instruction] line containing "request"
+// across the entire Player Log Samples/ library (~80 matches, 19 logs)
+// turned up zero instances of ATC using "request" as its own verb - every
+// one was player-initiated (check-in calls, pushback/taxi/startup
+// requests, direct-to-fix, altitude/approach/runway change requests), so a
+// bare content match is safe without a counterpart prompt-exclusion the
+// way RE_ATC_SELF_REPORT_PROMPT exists for "ready for descent" (where
+// "report ready for descent" genuinely is real ATC phraseology for the
+// same event).
+const RE_PILOT_REQUEST = /\brequest(?:ing|ed)?\b/i;
 
 // A single Player.log can contain multiple legs back-to-back if the sim
 // session was reused without restarting BeyondATC (each leg gets its own
@@ -440,7 +469,8 @@ function parseLegLines(lines, startIdx, endIdx){
       const playerActionFresh = (i - lastPlayerActionLine < 10);
       if(playerActionFresh) lastPlayerActionLine = -999;
       const isPlayerReport = playerActionFresh
-        || (RE_PILOT_SELF_REPORT.test(text) && !RE_ATC_SELF_REPORT_PROMPT.test(text));
+        || (RE_PILOT_SELF_REPORT.test(text) && !RE_ATC_SELF_REPORT_PROMPT.test(text))
+        || RE_PILOT_REQUEST.test(text);
       const speaker = isPlayerReport ? 'PILOT'
         : lastLVI && (i - lastLVILine < 20) ? (lastLVI.sid === '409' ? 'PILOT' : 'ATC')
         : 'UNKNOWN';
@@ -1009,7 +1039,7 @@ function evaluateExchange(ex, cfg){
         // readback - carried over separately (see the recompute() pass
         // below) and surfaced on the superseding exchange instead, same
         // pattern as the ALT carryover above.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward target, superseded before reaching it`, carryover:{targetHdg:target}});
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward target, new instructions before reaching heading ${target}°`, carryover:{targetHdg:target}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -1053,7 +1083,7 @@ function evaluateExchange(ex, cfg){
         // the reader has to mentally diff. diagram data drives the compass
         // visual rendered in the strip detail view (renderStrip/
         // headingCompassBlock).
-        results.push({type:'HDG', status, label:`Assigned ${target}° — rolled out on ${actual}° instead, ${diff}° off`, diagram:{target, actual, status}});
+        results.push({type:'HDG', status, label:`Assigned ${target}° — current heading ${actual}° instead, ${diff}° off`, diagram:{target, actual, status}});
       }
     } else {
       results.push({type:'HDG', status:'warn', label:`HDG ${target} — no data`});
@@ -1235,7 +1265,7 @@ function evaluateExchange(ex, cfg){
         // 'descend'.
         const progressVerb = action==='descend' ? 'still descending toward target' : action==='climb' ? 'still climbing toward target' : 'still approaching target';
         const progress = isOnGround(startState) ? 'parked when issued' : progressVerb;
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, superseded before reaching it`, carryover:{targetFt}});
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, new instructions before reaching altitude ${targetFt.toLocaleString()}`, carryover:{targetFt}});
       } else {
         let label;
         if(action==='descend' && diff > cfg.altTol){
@@ -1340,7 +1370,7 @@ function evaluateExchange(ex, cfg){
     }
     if(Math.abs(maxAbsVsEnroute) > cfg.vsWarn){
       const status = Math.abs(maxAbsVsEnroute) > cfg.vsBad ? 'bad' : 'warn';
-      // Narrative framing to match HDG/ALT ("Assigned X - rolled out on Y
+      // Narrative framing to match HDG/ALT ("Assigned X - current heading Y
       // instead") instead of a bare number with no reference point - names
       // which threshold was crossed (reusing the exact "caution"/
       // "violation" wording already used for these fields in the
@@ -1455,7 +1485,7 @@ function evaluateExchange(ex, cfg){
       );
       if(ex.spdSuperseded && progressing){
         const progressVerb = action==='reduce' ? 'still slowing toward target' : action==='increase' ? 'still speeding up toward target' : 'still adjusting toward target';
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetKt}kt — ${progressVerb}, superseded before reaching it`, carryover:{targetKt}});
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetKt}kt — ${progressVerb}, new instructions before reaching speed ${targetKt}kt`, carryover:{targetKt}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetKt}kt — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
@@ -1748,8 +1778,9 @@ function recompute(){
   cfgv.topOfClimbLineIndex = PARSED.meta.topOfClimbLineIndex;
   EXCHANGES.forEach(ex=>{ ex.eval = ex.isPilotReport ? evaluatePilotReport(ex, cfgv) : evaluateExchange(ex, cfgv); });
   // A clearance that was still in progress (not busted) when a later
-  // instruction superseded it gets a plain "superseded before reaching it"
-  // note on its OWN card (see evaluateExchange) - the altitude/time it
+  // instruction superseded it gets a plain "new instructions before
+  // reaching altitude/heading/speed X" note on its OWN card (see
+  // evaluateExchange) - the altitude/time it
   // eventually reached belongs to the moment it was superseded, not to
   // this clearance's own readback, so surface that half of the story on
   // the superseding exchange instead of backdating it onto this one.
