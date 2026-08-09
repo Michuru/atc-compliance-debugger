@@ -1,0 +1,2323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BeyondATC Compliance Debugger</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root{
+  --bg:#080c0d;
+  --panel:#0e1517;
+  --panel-2:#121b1e;
+  --line:#1e2b2e;
+  --text:#d6ece5;
+  --text-dim:#7d9691;
+  --text-dimmer:#4d605d;
+  --green:#3ddc91;
+  --green-dim:#1d4d38;
+  --amber:#ffb648;
+  --amber-dim:#5a4620;
+  --red:#ff5c6c;
+  --red-dim:#5a2530;
+  --blue:#5ec8ff;
+  --purple:#b48bff;
+  --magenta:#ff36d1;
+  --gray:#5c716d;
+  --sweep: rgba(61,220,145,0.06);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:
+    radial-gradient(ellipse at 20% -10%, rgba(61,220,145,0.05), transparent 55%),
+    radial-gradient(ellipse at 90% 0%, rgba(94,200,255,0.04), transparent 50%),
+    var(--bg);
+  color:var(--text);
+  font-family:'JetBrains Mono', ui-monospace, monospace;
+  min-height:100vh;
+}
+h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
+::selection{background:var(--green-dim);color:#fff;}
+
+/* ---------- Upload screen ---------- */
+#dropzone{
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  padding:40px 20px;
+  text-align:center;
+}
+#dropzone .scope{
+  width:120px;height:120px;border-radius:50%;
+  border:2px solid var(--green-dim);
+  position:relative;margin-bottom:28px;
+  display:flex;align-items:center;justify-content:center;
+}
+#dropzone .scope::before{
+  content:'';position:absolute;inset:18px;border-radius:50%;border:1px solid var(--green-dim);
+}
+#dropzone .scope::after{
+  content:'';position:absolute;width:2px;height:60px;background:linear-gradient(var(--green),transparent);
+  top:0;left:calc(50% - 1px);transform-origin:bottom center;
+  animation:sweep 3s linear infinite;
+}
+@keyframes sweep{ to { transform: rotate(360deg); } }
+#dropzone h1{font-size:28px;letter-spacing:0.5px;margin:0 0 8px;}
+#dropzone p{color:var(--text-dim);max-width:480px;line-height:1.6;margin:0 0 28px;font-size:14px;}
+.dropbox{
+  border:1.5px dashed var(--line);
+  border-radius:10px;
+  padding:32px 48px;
+  cursor:pointer;
+  transition:border-color .15s, background .15s;
+  background:var(--panel);
+}
+.dropbox:hover, .dropbox.drag{
+  border-color:var(--green);
+  background:var(--panel-2);
+}
+.dropbox .hint{color:var(--text-dimmer);font-size:12px;margin-top:10px;}
+.dropbox .big{font-size:15px;color:var(--text);}
+#fileInput{display:none;}
+#parseError{color:var(--red);margin-top:16px;font-size:13px;max-width:480px;}
+
+/* ---------- Main App ---------- */
+#app{display:none;min-height:100vh;}
+header.topbar{
+  position:sticky;top:0;z-index:20;
+  background:rgba(8,12,13,0.92);
+  backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--line);
+  padding:14px 24px;
+}
+.topbar-row{display:flex;align-items:center;gap:24px;flex-wrap:wrap;}
+.callsign{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:20px;letter-spacing:0.5px;}
+.callsign .dot{color:var(--green);}
+.route{color:var(--text-dim);font-size:13px;}
+.route b{color:var(--text);}
+.statgrid{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap;}
+.stat{text-align:right;}
+.stat .n{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;line-height:1;}
+.stat .l{font-size:10px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.8px;margin-top:2px;}
+.stat.ok .n{color:var(--green);}
+.stat.warn .n{color:var(--amber);}
+.stat.bad .n{color:var(--red);}
+button.ghost{
+  background:transparent;border:1px solid var(--line);color:var(--text-dim);
+  border-radius:6px;padding:7px 12px;font-family:inherit;font-size:12px;cursor:pointer;
+}
+button.ghost:hover{border-color:var(--text-dim);color:var(--text);}
+
+main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
+
+/* config panel */
+#configPanel{
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 20px;margin-bottom:20px;display:none;
+}
+#configPanel.open{display:block;}
+#configPanel h3{margin:0 0 14px;font-size:13px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;}
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;}
+.cfg-item label{display:block;font-size:11px;color:var(--text-dimmer);margin-bottom:4px;}
+.cfg-item .row{display:flex;align-items:center;gap:8px;}
+.cfg-item input[type=number]{
+  width:80px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+  border-radius:5px;padding:6px 8px;font-family:inherit;font-size:13px;
+}
+.cfg-item span.unit{color:var(--text-dimmer);font-size:11px;}
+.cat-note{color:var(--text-dimmer);font-size:11.5px;margin-bottom:10px;}
+.cat-note-inline{font-size:11.5px;color:var(--amber);margin-top:6px;}
+.cat-note-inline .link{text-decoration:underline;cursor:pointer;margin-left:6px;color:var(--amber);}
+.cat-note-inline .link:hover{color:var(--text);}
+.cat-table-wrap{overflow-x:auto;}
+.cat-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;}
+.cat-table th{text-align:left;color:var(--text-dimmer);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;padding:6px 12px 6px 0;border-bottom:1px solid var(--line);}
+.cat-table td{padding:7px 12px 7px 0;border-bottom:1px dotted var(--line);color:var(--text-dim);}
+.cat-table td.examples{color:var(--text-dimmer);font-size:11px;white-space:normal;min-width:220px;}
+.cat-table tr.current{background:rgba(61,220,145,0.06);}
+.cat-table tr.current td{color:var(--text);}
+
+/* chart */
+#chartWrap{
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px 8px;margin-bottom:20px;overflow-x:auto;
+}
+#chartWrap h3{margin:0 0 10px;font-size:13px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;}
+#chartWrap svg{display:block;}
+.legend{display:flex;gap:16px;font-size:11px;color:var(--text-dim);margin-top:6px;flex-wrap:wrap;}
+.legend .sw{display:inline-block;width:10px;height:2px;margin-right:5px;vertical-align:middle;}
+
+/* filter bar */
+.filterbar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+.pill{
+  background:var(--panel);border:1px solid var(--line);color:var(--text-dim);
+  border-radius:20px;padding:6px 14px;font-size:12px;cursor:pointer;user-select:none;
+  font-family:inherit;
+}
+.pill.active{background:var(--green-dim);border-color:var(--green);color:var(--green);}
+.pill .cnt{color:var(--text-dimmer);margin-left:4px;}
+.pill.active .cnt{color:var(--green);}
+#legPicker{padding:10px 14px;background:var(--panel-2);border:1px solid var(--amber-dim);border-radius:8px;}
+#legPicker .leg-label{color:var(--amber);font-size:12px;margin-right:4px;}
+#searchBox{
+  margin-left:auto;background:var(--panel);border:1px solid var(--line);color:var(--text);
+  border-radius:20px;padding:7px 14px;font-family:inherit;font-size:12px;min-width:200px;
+}
+#searchBox::placeholder{color:var(--text-dimmer);}
+
+/* strips */
+.strip{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-left:4px solid var(--gray);
+  border-radius:8px;
+  margin-bottom:10px;
+  overflow:hidden;
+  transition:border-color .15s;
+}
+.strip.status-ok{border-left-color:var(--green);}
+.strip.status-warn{border-left-color:var(--amber);}
+.strip.status-bad{border-left-color:var(--red);}
+.strip-head{
+  display:flex;align-items:center;gap:14px;padding:12px 16px;cursor:pointer;
+}
+.strip-time{color:var(--text-dimmer);font-size:11px;width:50px;flex-shrink:0;}
+.strip-main{flex:1;min-width:0;}
+.strip-instr{font-size:13.5px;color:var(--text);line-height:1.4;}
+.strip-instr .who{color:var(--text-dimmer);font-size:10px;text-transform:uppercase;letter-spacing:0.6px;margin-right:8px;}
+.strip-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;}
+.badge{
+  font-size:10.5px;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;
+  border:1px solid var(--line);color:var(--text-dim);white-space:nowrap;
+}
+.badge.ok{border-color:var(--green-dim);color:var(--green);background:rgba(61,220,145,0.06);}
+.badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,182,72,0.06);}
+.badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,92,108,0.08);}
+.strip-chevron{color:var(--text-dimmer);font-size:12px;flex-shrink:0;transition:transform .15s;}
+.strip.open .strip-chevron{transform:rotate(90deg);}
+.strip-detail{display:none;padding:0 16px 16px 16px;border-top:1px solid var(--line);margin-top:0;}
+.strip.open .strip-detail{display:block;}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;font-size:12px;}
+.detail-col h4{margin:0 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dimmer);}
+.kv{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dotted var(--line);color:var(--text-dim);}
+.kv b{color:var(--text);font-weight:500;}
+.readback{color:var(--text-dim);font-style:italic;font-size:12.5px;margin-top:6px;}
+.readback .who{color:var(--text-dimmer);font-style:normal;font-size:10px;text-transform:uppercase;margin-right:6px;}
+.rawvoice{background:var(--panel-2);border-radius:6px;padding:8px 10px;color:var(--text-dimmer);font-size:11.5px;margin-top:10px;}
+.hdg-compass{display:flex;align-items:center;gap:12px;background:var(--panel-2);border-radius:6px;padding:8px 10px;margin-top:10px;}
+.hdg-compass-legend{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--text-dim);}
+
+#emptyState{text-align:center;padding:60px 20px;color:var(--text-dimmer);}
+
+.section-title{font-size:13px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;margin:28px 0 12px;}
+</style>
+</head>
+<body>
+
+<div id="dropzone">
+  <div class="scope"></div>
+  <h1>BeyondATC Compliance Debugger</h1>
+  <p>Drop a Player log file (.log / .txt) to see every ATC instruction paired with what the aircraft actually did &mdash; heading, altitude, and speed compliance, flagged automatically.</p>
+  <label class="dropbox" id="dropbox">
+    <div class="big">Click to choose a file, or drag it here</div>
+    <div class="hint">Parsed entirely in your browser &mdash; nothing is uploaded anywhere</div>
+    <input type="file" id="fileInput" accept=".log,.txt">
+  </label>
+  <div id="parseError"></div>
+</div>
+
+<div id="app">
+  <header class="topbar">
+    <div class="topbar-row">
+      <div>
+        <div class="callsign" id="hCallsign">&mdash;</div>
+        <div class="route" id="hRoute">&mdash;</div>
+        <div class="cat-note-inline" id="hCatNote" style="display:none;"></div>
+        <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
+        <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
+      </div>
+      <div class="statgrid" id="hStats"></div>
+      <button class="ghost" id="btnConfig">⚙ Thresholds</button>
+      <button class="ghost" id="btnReload">↺ New file</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="filterbar" id="legPicker" style="display:none;"></div>
+
+    <div id="configPanel">
+      <h3>Compliance thresholds</h3>
+      <div class="cfg-grid" id="cfgGrid"></div>
+      <h3 style="margin-top:22px;">Aircraft category reference</h3>
+      <div id="categoryTable"></div>
+    </div>
+
+    <div id="chartWrap">
+      <h3>Flight profile</h3>
+      <div id="chartHost"></div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--purple)"></span>Altitude (ft)</span>
+        <span><span class="sw" style="background:var(--blue)"></span>Speed (kt IAS)</span>
+        <span><span class="sw" style="background:var(--amber)"></span>Instruction marker (click to jump)</span>
+      </div>
+    </div>
+
+    <div class="filterbar" id="filterBar"></div>
+    <input type="text" id="searchBox" placeholder="Search instruction text…" style="width:100%;margin:0 0 16px;">
+
+    <div class="section-title" id="listTitle">ATC Instructions</div>
+    <div id="stripList"></div>
+    <div id="emptyState" style="display:none;">No instructions match this filter.</div>
+  </main>
+</div>
+
+<script>
+/* ============================================================
+   PARSER
+   ============================================================ */
+
+const RE_PLAYERSTATE = /\[PlayerState\]\s+\w+\s+(\d{1,2}):(\d{2}),\s*lat:\s*([-\d.]+),\s*lon:\s*([-\d.]+),\s*alt:\s*(-?[\d.]+),\s*hdg:\s*(-?[\d.]+),\s*spd:\s*(-?[\d.]+),\s*gs:\s*(-?[\d.]+),\s*lastFix:\s*([^,]*),\s*currFix:\s*([^,]*),\s*inVector:\s*(True|False),\s*com1:\s*([^,]*),\s*com2:\s*([^,]*),\s*transponder:\s*([^\r\n]*)/;
+const RE_LVI = /\[LocalVoiceInput\]\s+sid=(\d+)\s+ls=([\d.]+)\s*\|\s*"(.*)"/;
+const RE_INSTR = /\[Instruction\]\s(.*)/;
+const RE_CRUISE = /Initial Cruise Altitude:\s*(\d+)/;
+const RE_SIMBRIEF = /SimBrief flight plan URL:\s*(\S+)/;
+const RE_PLAYER_CALLSIGN = /Player Callsign:\s*(\S+)/;
+// Real (push-to-talk) pilot speech goes through a separate speech-to-text
+// pipeline instead of the [LocalVoiceInput]/[Instruction] pair used for
+// synthesized ATC voice and text-based readbacks. The "AI Processed" line
+// is BeyondATC's cleaned-up transcript of what the pilot actually said -
+// confirmed against the BATC LOG Scanner community tool, which surfaces
+// this same line as the pilot's response. Logs that don't use voice
+// recognition never contain this tag at all, so this is additive only.
+const RE_SPEECH_AI = /\[Speech Transcription\] AI Processed:\s*(.*)/;
+// BeyondATC logs a "[PlayerAction] <button name>" line whenever the pilot
+// triggers a canned report/request via the UI (or AutoRespond) - "Call
+// Ready for Descent", "Report Established", "Request Direct to Fix",
+// "Request Push and Start", etc. The resulting synthesized voice line is
+// unambiguously pilot speech, but a real BeyondATC quirk breaks the
+// existing callsign-position speaker heuristic for many of these: unlike
+// a readback (which always signs off WITH the callsign at the end, "Wilco,
+// N452DA"), most of these self-initiated reports LEAD with the callsign
+// instead ("N452DA, ready for descent.") - identical in shape to real ATC
+// phraseology, which also leads with the callsign. Confirmed against real
+// logs (`Player - ATC forgot me.log`'s "ready for descent",
+// `KADS Departure doesnt work.txt`'s "request direct to fix", and others)
+// that this was silently misclassifying the PLAYER's own reports as ATC
+// speech. The literal [PlayerAction] tag is a structurally unambiguous
+// marker - no phrase-guessing needed - so this is used directly instead of
+// enumerating every possible button's wording.
+const RE_PLAYER_ACTION = /\[PlayerAction\]/;
+// Not every instance of this same misclassification has a [PlayerAction]
+// tag nearby, though - confirmed against `2026-08-03(EIDW-EGNT).log`,
+// where "Ryanair 15XV, ready for descent." (the player's own report,
+// leading with the callsign) has no tag anywhere near it, yet is
+// unambiguously the player speaking, not ATC - real AI traffic's simulated
+// readback of the identical event instead ENDS with the callsign ("Ready
+// for descent, Broadsword 925."), which is how BeyondATC distinguishes
+// the player's own phrasing from other aircraft's in this log format. A
+// small, explicit content fallback for the two report types that matter
+// for compliance checking (ready for descent/departure), rather than a
+// broad heuristic - distinguished from ATC's own "REPORT ready for
+// descent" prompt for the same event by the absence of that leading verb.
+const RE_PILOT_SELF_REPORT = /\bready for (descent|departure)\b/i;
+const RE_ATC_SELF_REPORT_PROMPT = /\breport\s+ready for (descent|departure)\b/i;
+
+// A single Player.log can contain multiple legs back-to-back if the sim
+// session was reused without restarting BeyondATC (each leg gets its own
+// "Player Callsign:" line). Parsing the whole file as one flight in that
+// case mixes states/events from unrelated flights and picks a single
+// callsign for the entire file, breaking classification for every leg but
+// whichever one that callsign actually belongs to. Split on "Player
+// Callsign:" line positions - it's emitted once near the start of each
+// leg's data (unlike the exchange tags below, which repeat throughout).
+function findLegBoundaries(lines){
+  const bounds = [];
+  for(let i=0;i<lines.length;i++){ if(RE_PLAYER_CALLSIGN.test(lines[i])) bounds.push(i); }
+  return bounds.length ? bounds : [0];
+}
+
+function parseLog(text){
+  const lines = text.split(/\r?\n/);
+  const bounds = findLegBoundaries(lines);
+  const legs = bounds.map((start, idx) => {
+    const end = idx+1 < bounds.length ? bounds[idx+1] : lines.length;
+    return parseLegLines(lines, start, end);
+  });
+  return { legs };
+}
+
+function parseLegLines(lines, startIdx, endIdx){
+  let lastState = null, lastLVI = null, lastLVILine = -999, lastPlayerActionLine = -999;
+  const states = [];       // all PlayerState samples, chronological
+  const events = [];       // all Instruction events (ATC or PILOT)
+  let meta = { cruiseAlt:null, orig:null, dest:null, origrwy:null, destrwy:null, actype:null, route:null, playerCallsigns:[] };
+
+  for(let i=startIdx;i<endIdx;i++){
+    const line = lines[i];
+
+    let m;
+    if((m = line.match(RE_CRUISE))){ meta.cruiseAlt = parseInt(m[1]); continue; }
+    if((m = line.match(RE_PLAYER_CALLSIGN))){ meta.playerCallsigns.push(m[1]); continue; }
+    if((m = line.match(RE_SIMBRIEF))){
+      try{
+        const u = new URL(m[1]);
+        meta.orig = u.searchParams.get('orig');
+        meta.dest = u.searchParams.get('dest');
+        meta.origrwy = u.searchParams.get('origrwy');
+        meta.destrwy = u.searchParams.get('destrwy');
+        meta.actype = u.searchParams.get('type');
+        meta.route = u.searchParams.get('route');
+      }catch(e){}
+      continue;
+    }
+
+    if(RE_PLAYER_ACTION.test(line)){
+      lastPlayerActionLine = i;
+      continue;
+    }
+
+    if((m = line.match(RE_PLAYERSTATE))){
+      const st = {
+        lineIndex: i,
+        timeMin: parseInt(m[1])*60 + parseInt(m[2]),
+        lat: parseFloat(m[3]), lon: parseFloat(m[4]),
+        alt: parseFloat(m[5]), hdg: parseFloat(m[6]),
+        spd: parseFloat(m[7]), gs: parseFloat(m[8]),
+        lastFix: m[9].trim(), currFix: m[10].trim(),
+        inVector: m[11] === 'True',
+        com1: m[12].trim(), com2: m[13].trim(), xpdr: m[14].trim()
+      };
+      lastState = st;
+      states.push(st);
+      continue;
+    }
+
+    if((m = line.match(RE_LVI))){
+      lastLVI = { sid: m[1], ls: parseFloat(m[2]), text: m[3] };
+      lastLVILine = i;
+      continue;
+    }
+
+    if((m = line.match(RE_SPEECH_AI))){
+      const spoken = m[1].trim();
+      if(spoken){
+        events.push({
+          lineIndex: i,
+          text: spoken,
+          rawVoice: spoken,
+          sid: null,
+          speaker: 'PILOT',
+          state: lastState
+        });
+      }
+      continue;
+    }
+
+    if((m = line.match(RE_INSTR))){
+      const text = m[1].trim();
+      // A recent [PlayerAction] tag, or content matching a known player
+      // self-report phrase (see RE_PLAYER_ACTION/RE_PILOT_SELF_REPORT
+      // above), overrides everything else - both are structurally
+      // unambiguous "the player said this" signals, so they win over both
+      // the sid-based guess here and, later, refineSpeakersByCallsign's
+      // callsign-position heuristic (which both cases break for - these
+      // reports lead with the callsign like ATC does, instead of ending
+      // with it like a normal readback). Tight line-proximity window (the
+      // action, its voice line, and the resulting Instruction are always
+      // only ~4 lines apart in practice - confirmed against real logs) -
+      // and the tag is consumed (reset to a sentinel) the moment it's
+      // used, so it can only ever claim the ONE Instruction line it
+      // actually produced. Without the reset, a real regression showed up
+      // against `Player slc.txt`: the tag correctly claimed the player's
+      // own "ready for descent" report 4 lines later, but then - still
+      // within a naive 20-line window - ALSO wrongly claimed the next,
+      // completely unrelated real ATC clearance ("descend via CARTR1
+      // arrival...") 15 lines after the tag as if the player had said it.
+      const playerActionFresh = (i - lastPlayerActionLine < 10);
+      if(playerActionFresh) lastPlayerActionLine = -999;
+      const isPlayerReport = playerActionFresh
+        || (RE_PILOT_SELF_REPORT.test(text) && !RE_ATC_SELF_REPORT_PROMPT.test(text));
+      const speaker = isPlayerReport ? 'PILOT'
+        : lastLVI && (i - lastLVILine < 20) ? (lastLVI.sid === '409' ? 'PILOT' : 'ATC')
+        : 'UNKNOWN';
+      events.push({
+        lineIndex: i,
+        text,
+        rawVoice: lastLVI ? lastLVI.text : null,
+        sid: lastLVI ? lastLVI.sid : null,
+        speaker,
+        playerActionTriggered: isPlayerReport,
+        state: lastState
+      });
+      continue;
+    }
+  }
+
+  return { meta, states, events };
+}
+
+/* ============================================================
+   CLEARANCE CLASSIFICATION
+   ============================================================ */
+
+function parseAltitudeClearance(text){
+  // "At pilot's discretion" (Pilot/Controller Glossary) explicitly hands the
+  // pilot control over WHEN to start the climb/descent - often delayed
+  // intentionally for fuel efficiency - so there's no real compliance
+  // expectation to time a response against. Flagged here once and carried
+  // on the returned clearance so evaluateExchange's response-delay check
+  // can skip it instead of treating a deliberate delay as slow compliance.
+  const atDiscretion = /pilot'?s?\s+discretion/i.test(text);
+  // "Maintain X UNTIL ESTABLISHED (on the localizer/final approach course)"
+  // explicitly releases the interim altitude the moment the aircraft
+  // captures the approach course - continuing to descend past X after that
+  // is the expected, correct outcome of flying the ILS, not a deviation.
+  // Carried on the returned clearance so evaluateExchange's post-compliance
+  // drift check can skip it entirely (same pattern as atDiscretion above),
+  // instead of reading a normal glideslope descent as "drifted off the
+  // assigned altitude" (confirmed against a real log: Player (5).log's
+  // "maintain 1,700 until established" correctly kept descending to
+  // 1,346ft right after reaching 1,700 - that's localizer capture working,
+  // not a violation).
+  const untilEstablished = /until\s+established/i.test(text);
+  // "Climb via [SID]"/"descend via [STAR]" (Pilot/Controller Glossary:
+  // compliance with the *procedure's own* published restrictions) often
+  // carries its own numeric override a little further into the sentence -
+  // "descend via STELA1, descend at pilot's discretion, maintain FL330" -
+  // so allow other words between climb/descend and maintain instead of
+  // requiring them adjacent (only "and" was previously tolerated).
+  let m = text.match(/(climb|descend)\b(?:(?!\bmaintain\b).){0,60}?\bmaintain\s+FL\s*(\d{3})/i);
+  if(m) return { action:m[1].toLowerCase(), targetFt: parseInt(m[2])*100, raw:m[0], atDiscretion, untilEstablished };
+  m = text.match(/(climb|descend)\b(?:(?!\bmaintain\b).){0,60}?\bmaintain\s+([\d,]+)/i);
+  if(m) return { action:m[1].toLowerCase(), targetFt: parseInt(m[2].replace(/,/g,'')), raw:m[0], atDiscretion, untilEstablished };
+  m = text.match(/except\s+maintain\s+([\d,]+)/i);
+  if(m) return { action:'climb', targetFt: parseInt(m[1].replace(/,/g,'')), raw:m[0], atDiscretion, untilEstablished };
+  // Not every real clearance says "maintain" - "descend to FL220",
+  // "descend FL100" (no "to"), and "descend via STAR to FL100" (a
+  // descend-via clearance ending in a level instead of repeating
+  // "maintain") are all equally real ATC phrasing and were previously
+  // invisible to this parser entirely: parseAltitudeClearance returned
+  // null, so the exchange got NO compliance evaluation at all - not
+  // flagged compliant, not flagged a violation, just silently skipped.
+  // That's a worse failure mode than a wrong verdict, since a genuine
+  // altitude bust on one of these would look identical to "nothing to
+  // see here." Tight/direct-adjacency (only an optional single "via
+  // WORD" between climb/descend and the target) rather than the wide
+  // {0,60} skip-ahead the "maintain" patterns use above, so this can't
+  // reach past a comma into an unrelated later clause.
+  m = text.match(/(climb|descend)\b(?:\s+via\s+[\w-]+)?\s+(?:to\s+)?FL\s*(\d{3})\b/i);
+  if(m) return { action:m[1].toLowerCase(), targetFt: parseInt(m[2])*100, raw:m[0], atDiscretion };
+  m = text.match(/(climb|descend)\b(?:\s+via\s+[\w-]+)?\s+(?:to\s+)?([\d,]{3,})\s*(?:feet)?\b/i);
+  if(m) return { action:m[1].toLowerCase(), targetFt: parseInt(m[2].replace(/,/g,'')), raw:m[0], atDiscretion };
+  // "Cross (fix) at/at or above/at or below (altitude)" is a point
+  // restriction (only matters exactly at that fix), not a continuous
+  // climb/descend/maintain target - the bust-detection above is built for
+  // continuous windows and would false-alarm on normal climb/descent
+  // through the crossing point, so this deliberately reports a target
+  // without direction (no bust-check) rather than guess a wrong one.
+  // Accepts flight-level notation ("cross SUGOL at or above FL100") as
+  // well as the plain-digit form, tried first since "FL100" would
+  // otherwise dead-end the digit-only branch on the letter "F".
+  m = text.match(/cross\s+[\w-]+\s+at\s+(?:or\s+(?:above|below)\s+)?(?:FL\s*(\d{3})|([\d,]+)\s*(?:feet)?)/i);
+  if(m) return { action:'maintain', targetFt: m[1] ? parseInt(m[1])*100 : parseInt(m[2].replace(/,/g,'')), raw:m[0], pointRestriction:true };
+  m = text.match(/\bmaintain\s+([\d,]{3,})\s*(?:feet)?\b/i);
+  if(m) return { action:'maintain', targetFt: parseInt(m[1].replace(/,/g,'')), raw:m[0], untilEstablished };
+  // "Climb via [SID]" / "descend via [STAR]" complies with the *procedure's
+  // own* published altitude restrictions at each fix, which this tool has
+  // no independent access to (only the aircraft's own telemetry, not the
+  // charted procedure) - so this deliberately returns a clearance with no
+  // single targetFt to check compliance against, rather than guessing one.
+  // In particular, real logs commonly trail this phrasing with a bare
+  // number - "descend via CARTR1 arrival, runway 34L, 3003" - that looks
+  // like it could be an altitude but isn't: it's an altimeter setting
+  // (30.03 inHg, or e.g. 1017 for a hPa/QNH airport), not a target, and
+  // must never be parsed as one. Still needs to be recognized as a real,
+  // in-effect clearance though - previously this phrasing fell through to
+  // `null` entirely, which meant it never closed out whatever numeric
+  // altitude clearance came before it: that earlier clearance's compliance
+  // window then silently swallowed the ENTIRE rest of the descent as if
+  // still "in effect," which would read a perfectly normal, authorized
+  // descent as a violation of the earlier number (confirmed against a
+  // real log: Player slc.txt's "climb maintain FL360" window never closed
+  // until "descend and maintain 9,000" nearly 20 minutes and 25,000ft of
+  // authorized descent later - "descend via CARTR1 arrival, runway 34L,
+  // 3003" appeared in between and was silently invisible to this parser).
+  m = text.match(/(climb|descend)\s+via\s+[\w-]+/i);
+  if(m) return { action:m[1].toLowerCase(), targetFt:null, raw:m[0], viaProcedure:true, atDiscretion };
+  return null;
+}
+
+function parseHeadingClearance(text){
+  let m = text.match(/turn\s+(left|right),?\s*heading\s*(\d{2,3})/i);
+  if(m) return { direction:m[1].toLowerCase(), targetHdg: parseInt(m[2]), raw:m[0] };
+  m = text.match(/fly\s+heading\s*(\d{2,3})/i);
+  if(m) return { direction:null, targetHdg: parseInt(m[1]), raw:m[0] };
+  // "Leave (FIX) heading (XXX)" is a point-triggered STAR-transition
+  // instruction (FAA JO 7110.65 phraseology, controller-side - not the
+  // AIM or ICAO Doc 4444, which are the two references in this repo, so
+  // no citation from what's on hand): it means "once you leave FIX,
+  // fly heading XXX," not "turn to XXX right now." The aircraft is still
+  // expected to be inbound to FIX at the moment of the call - fixName is
+  // captured so evaluateExchange can anchor compliance timing to actually
+  // leaving that fix (mirrors the existing ground-clearance liftoff
+  // anchoring for altitude, isOnGround/firstAirborneState) instead of the
+  // instant of the radio call.
+  m = text.match(/leave\s+([\w-]+)\s+heading\s*(\d{2,3})/i);
+  if(m) return { direction:null, targetHdg: parseInt(m[2]), raw:m[0], fixTriggered:true, fixName:m[1] };
+  return null;
+}
+
+// Real BeyondATC phraseology, confirmed against `2026-08-03(EIDW-EGNT).log`,
+// doesn't match what this regex originally expected on any of three counts:
+// "reduce speed 220 kts." (no "to" between "speed" and the number - the old
+// pattern required "reduce speed to"), "increase speed 240 kts." (the verb
+// "increase" wasn't recognized at all), and the abbreviated unit "kts" (the
+// old pattern only matched "knots"/"knot", never "kts"). All four real
+// speed clearances in that log silently failed to parse before this fix -
+// not just unevaluated (see evaluateExchange's SPD section), completely
+// invisible to the parser, with `clearance.speed` staying null and zero
+// eval results produced for the exchange at all.
+function parseSpeedClearance(text){
+  const m = text.match(/(reduce speed|increase speed|slow to|maintain)(?:\s+to)?\s*(\d{2,3})\s*(?:knots?|kts?)\b/i);
+  if(!m) return null;
+  const verb = m[1].toLowerCase();
+  const action = verb.startsWith('increase') ? 'increase' : (verb.startsWith('reduce') || verb==='slow to') ? 'reduce' : 'maintain';
+  return { targetKt: parseInt(m[2]), raw:m[0], action };
+}
+
+function parseApproachClearance(text){
+  let m = text.match(/cleared\s+(the\s+)?([\w\s]+?)\s+approach(?:\s+runway\s*(\w+))?/i);
+  if(m) return { kind:m[2].trim(), runway:m[3]||null, raw:m[0] };
+  return null;
+}
+
+function parseLandingClearance(text){
+  let m = text.match(/runway\s*(\w+)\s+cleared to land/i);
+  if(m) return { runway:m[1], raw:m[0] };
+  if(/cleared to land/i.test(text)) return { runway:null, raw:text.match(/cleared to land/i)[0] };
+  return null;
+}
+
+// Pilot/Controller Glossary phrases that explicitly cancel a still-open
+// clearance without issuing a replacement one: "resume own navigation"
+// releases the aircraft from a heading vector, and "altitude restrictions
+// are canceled" releases it from an interim altitude restriction.
+function parseCancelClearance(text){
+  return {
+    heading: /resume\s+own\s+navigation/i.test(text),
+    altitude: /altitude\s+restrictions?\s+(?:are|is)\s+cancel(?:l)?ed/i.test(text),
+    // "Resume normal speed" - confirmed real phraseology in
+    // `2026-08-03(EIDW-EGNT).log`, same role as "resume own navigation" for
+    // heading: explicitly releases a prior speed restriction rather than
+    // being superseded by a new one.
+    speed: /resume\s+normal\s+speed/i.test(text)
+  };
+}
+
+function classify(text){
+  return {
+    altitude: parseAltitudeClearance(text),
+    heading: parseHeadingClearance(text),
+    speed: parseSpeedClearance(text),
+    approach: parseApproachClearance(text),
+    landing: parseLandingClearance(text),
+    cancel: parseCancelClearance(text)
+  };
+}
+
+/* ============================================================
+   EXCHANGE BUILDING + COMPLIANCE EVALUATION
+   ============================================================ */
+
+function buildExchanges(parsed){
+  const { events, states } = parsed;
+  const atcEvents = events.filter(e=>e.speaker==='ATC');
+  const exchanges = [];
+  const classified = atcEvents.map(e=>classify(e.text));
+
+  for(let idx=0; idx<atcEvents.length; idx++){
+    const atc = atcEvents[idx];
+    const gi = events.indexOf(atc);
+    // find readback: next event(s) up to 4 ahead that is PILOT, before another ATC event
+    let readback = null;
+    for(let j=gi+1;j<events.length && j<=gi+4;j++){
+      if(events[j].speaker==='ATC') break;
+      if(events[j].speaker==='PILOT'){ readback = events[j]; break; }
+    }
+    const clearance = classified[idx];
+    const hasTarget = clearance.altitude || clearance.heading || clearance.speed;
+
+    // Short "display" window: bounded by the very next ATC transmission of any
+    // kind. Used only for the immediate readback/detail snapshot in the UI.
+    const nextAtc = atcEvents[idx+1];
+    const displayWindowEnd = nextAtc ? nextAtc.lineIndex : Infinity;
+    const windowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < displayWindowEnd);
+
+    // Compliance windows: a clearance stays "in effect" until ATC issues a
+    // NEW clearance of the SAME type (a new heading, or a new altitude), OR
+    // authorizes the approach/landing (which functionally supersedes prior
+    // vector headings and interim altitude restrictions - once cleared for
+    // the approach, further turning to final and descending below an
+    // interim altitude is expected, not a compliance failure). Plain
+    // chatter (frequency changes, squawk, direct-to) does not cancel a
+    // still-pending climb/descent/turn.
+    // altSupersededByIdx/hdgSupersededByIdx identify the superseding
+    // exchange by lineIndex (not array position) - EXCHANGES gains
+    // player-report entries further down, interleaved chronologically by
+    // lineIndex after this loop, which would silently invalidate a raw
+    // array-position reference (see recompute()'s lookup, which now
+    // searches by lineIndex instead of indexing EXCHANGES directly).
+    let altWindowEnd = Infinity, altSupersededBy = null, altSupersededByIdx = null;
+    let hdgWindowEnd = Infinity, hdgSupersededBy = null, hdgSupersededByIdx = null;
+    // SPD mirrors ALT/HDG, but deliberately does NOT close on an approach
+    // clearance the way ALT/HDG do - a numeric speed restriction ("reduce
+    // speed to 220 for spacing") is commonly assigned exactly during
+    // approach vectoring, and unlike a heading vector or interim altitude,
+    // the approach clearance phraseology doesn't itself supersede it. Real
+    // ATC practice cancels it explicitly ("resume normal speed") or
+    // supersedes it with a new speed instruction instead - closing on
+    // landing too, since any residual spacing restriction is moot once
+    // cleared to land. This is a judgment call, not verified against a
+    // real log with an approach-clearance-supersedes-speed example.
+    let spdWindowEnd = Infinity, spdSupersededBy = null, spdSupersededByIdx = null;
+    for(let j=idx+1;j<atcEvents.length;j++){
+      if(altWindowEnd===Infinity){
+        if(classified[j].altitude){ altWindowEnd = atcEvents[j].lineIndex; altSupersededBy = 'altitude'; altSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].approach){ altWindowEnd = atcEvents[j].lineIndex; altSupersededBy = 'approach'; altSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].landing){ altWindowEnd = atcEvents[j].lineIndex; altSupersededBy = 'landing'; altSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].cancel.altitude){ altWindowEnd = atcEvents[j].lineIndex; altSupersededBy = 'canceled'; altSupersededByIdx = atcEvents[j].lineIndex; }
+      }
+      if(hdgWindowEnd===Infinity){
+        if(classified[j].heading){ hdgWindowEnd = atcEvents[j].lineIndex; hdgSupersededBy = 'heading'; hdgSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].approach){ hdgWindowEnd = atcEvents[j].lineIndex; hdgSupersededBy = 'approach'; hdgSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].cancel.heading){ hdgWindowEnd = atcEvents[j].lineIndex; hdgSupersededBy = 'ownNav'; hdgSupersededByIdx = atcEvents[j].lineIndex; }
+      }
+      if(spdWindowEnd===Infinity){
+        if(classified[j].speed){ spdWindowEnd = atcEvents[j].lineIndex; spdSupersededBy = 'speed'; spdSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].landing){ spdWindowEnd = atcEvents[j].lineIndex; spdSupersededBy = 'landing'; spdSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].cancel.speed){ spdWindowEnd = atcEvents[j].lineIndex; spdSupersededBy = 'canceled'; spdSupersededByIdx = atcEvents[j].lineIndex; }
+      }
+      if(altWindowEnd!==Infinity && hdgWindowEnd!==Infinity && spdWindowEnd!==Infinity) break;
+    }
+    const altWindowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < altWindowEnd);
+    const hdgWindowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < hdgWindowEnd);
+    const spdWindowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < spdWindowEnd);
+
+    exchanges.push({
+      id: idx,
+      lineIndex: atc.lineIndex,
+      atc, readback, clearance, hasTarget,
+      windowStates, altWindowStates, hdgWindowStates, spdWindowStates,
+      altSuperseded: altWindowEnd !== Infinity,
+      altSupersededBy,
+      altSupersededByIdx,
+      hdgSuperseded: hdgWindowEnd !== Infinity,
+      hdgSupersededBy,
+      hdgSupersededByIdx,
+      spdSuperseded: spdWindowEnd !== Infinity,
+      spdSupersededBy,
+      spdSupersededByIdx,
+      isLast: !nextAtc
+    });
+  }
+
+  // Player self-reports ("ready for descent") are pilot-initiated, not ATC
+  // instructions, so they don't naturally become one of the exchanges
+  // above (built only from atcEvents) - but a self-report doesn't
+  // authorize anything by itself: BeyondATC won't clear the descent until
+  // the aircraft reaches its own calculated top-of-descent point, and a
+  // pilot who descends anyway before ATC actually clears it has genuinely
+  // deviated from their assigned altitude without authorization. Surfaced
+  // as its own entry in the instruction timeline (evaluated separately in
+  // recompute(), see evaluatePilotReport - not by evaluateExchange, which
+  // has nothing to check against a report with no clearance target of its
+  // own) anchored at the report itself, so the reader sees the request and
+  // its outcome together instead of an unexplained altitude change
+  // attributed to whatever later exchange happens to follow it.
+  events.filter(e =>
+    e.speaker==='PILOT' && /descent/i.test(e.text) &&
+    RE_PILOT_SELF_REPORT.test(e.text) && !RE_ATC_SELF_REPORT_PROMPT.test(e.text)
+  ).forEach(reportEvent => {
+    // "Pending" until the next ATC instruction that actually authorizes an
+    // altitude change - a numeric "descend and maintain X" or a "descend
+    // via STAR" (viaProcedure, see parseAltitudeClearance) both count,
+    // since either genuinely releases the aircraft to descend; anything
+    // else (frequency changes, squawk, a heading vector) doesn't.
+    let boundaryLineIndex = Infinity;
+    for(let j=0;j<atcEvents.length;j++){
+      if(atcEvents[j].lineIndex <= reportEvent.lineIndex) continue;
+      if(classified[j].altitude){ boundaryLineIndex = atcEvents[j].lineIndex; break; }
+    }
+    const windowStates = states.filter(s => s.lineIndex > reportEvent.lineIndex && s.lineIndex < boundaryLineIndex);
+    exchanges.push({
+      id: null, // reassigned below once the merged array is in final chronological order
+      lineIndex: reportEvent.lineIndex,
+      atc: reportEvent, // same {lineIndex,text,rawVoice,sid,speaker,state} shape renderStrip already expects
+      readback: null,
+      clearance: { altitude:null, heading:null, speed:null, approach:null, landing:null, cancel:{heading:false,altitude:false} },
+      hasTarget: false,
+      windowStates, altWindowStates: [], hdgWindowStates: [],
+      altSuperseded:false, altSupersededBy:null, altSupersededByIdx:null,
+      hdgSuperseded:false, hdgSupersededBy:null, hdgSupersededByIdx:null,
+      isLast:false,
+      isPilotReport: true,
+      reportKind: 'readyForDescent',
+      reportWindowEndLineIndex: boundaryLineIndex
+    });
+  });
+
+  // Re-sort chronologically (player-report entries were appended after the
+  // atcEvents loop above) and reassign `id` to match final array position -
+  // the chart's click-to-jump handler indexes rendered strips by this id
+  // (see drawChart's marker click listener), so it must track actual
+  // position, not the original atcEvents-only ordering.
+  exchanges.sort((a,b) => a.lineIndex - b.lineIndex);
+  exchanges.forEach((ex,i) => ex.id = i);
+  return exchanges;
+}
+
+function fmtTime(min){
+  if(min==null) return '—';
+  const h = Math.floor(min/60)%24, m = min%60;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+}
+function headingDiff(a,b){
+  let d = Math.abs(a-b)%360;
+  return d>180 ? 360-d : d;
+}
+
+// True if the aircraft was stationary (parked/holding) when this state was
+// recorded - used to detect clearances issued on the ground, like the
+// initial gate "climb via SID except maintain X" delivered long before
+// pushback, so climb-progress isn't measured from a moment the aircraft
+// wasn't moving at all. Groundspeed is the reliable "not moving" signal
+// here (strict <5) - indicated airspeed is not, since a parked aircraft
+// sitting in ramp/taxiway wind can show a real nonzero IAS reading purely
+// from wind crossing the pitot tube despite gs==0. The old spd<5 (matching
+// gs's own threshold) missed exactly that: four real initial gate
+// clearances - Player slc.txt, Player (8).log, 2026-08-03(EIDW-EGNT).log,
+// 2026-07-19(EGAA-EGNV)dd.log - all logged gs:0 (genuinely parked) but
+// spd:5-8 at the moment of the clearance, which failed the old spd<5 half
+// and made evaluateExchange's ground-issued-clearance branch misfire as
+// "still climbing toward target" for an aircraft that was still sitting
+// at the gate reading the clearance back, not moving at all. spd<20 still
+// safely excludes genuine flight - no aircraft in this tool's scope
+// flies under 20kt indicated airspeed (even Category A's 81kt landing
+// speed leaves a wide margin) - while comfortably covering realistic
+// ramp wind gusts on a stationary aircraft.
+function isOnGround(state){
+  return !!state && state.spd < 20 && state.gs < 5;
+}
+
+// Whether the aircraft is no longer under controlled flight - a looser,
+// different question from isOnGround's "stationary" gate above (spd<5 &&
+// gs<5), which is too strict to catch active taxiing: real logs show
+// 10-25kt sustained through taxi turns, well above that gate (confirmed
+// against Player (8).log's post-landing rollout/taxi, which bottomed out
+// at 11kt groundspeed and never dropped under it). Used to keep a
+// still-open airborne clearance's post-compliance drift check (see
+// evaluateExchange) from reading normal taxi turns or ground movement as
+// a heading/altitude deviation. Indicated airspeed rather than
+// groundspeed - unlike groundspeed, it isn't skewed by headwind/tailwind
+// on final, and no aircraft in this tool's own CATEGORY_PERFORMANCE table
+// lands slower than 81kt (Category A) - so anything well under that is
+// unambiguously no longer flying, not just "slow."
+function hasStoppedFlying(state){
+  return !!state && state.spd < 50;
+}
+
+// First later state where the aircraft has actually left the ground
+// (climbed meaningfully above the altitude it was sitting at).
+function firstAirborneState(states, groundState){
+  return states.find(s => s.alt > groundState.alt + 100) || null;
+}
+
+// First state where the aircraft has actually left a named fix - detected
+// via lastFix flipping to that fix name (BeyondATC tracks "the fix just
+// passed" as its own field, distinct from currFix which is "the fix being
+// flown toward"). Used to anchor "leave (FIX) heading (XXX)" compliance
+// timing to when the point-trigger condition is actually met, not the
+// instant of the radio call - verified against a real log: the aircraft
+// was still 1-2 samples from reaching the named fix when the instruction
+// was issued.
+function firstStateAfterLeavingFix(states, fixName){
+  if(!fixName) return null;
+  const target = fixName.toUpperCase();
+  return states.find(s => s.lastFix && s.lastFix.toUpperCase() === target) || null;
+}
+
+// Field elevation, read straight from the log's own parked PlayerState
+// samples instead of an external airport database - the "on approach"
+// altitude threshold is meant to be AGL (see approachAltThreshold's unit),
+// but a bare MSL number silently breaks at high-elevation fields like KGPI
+// (~2977ft), where "below 3000ft" is true almost the moment the gear comes
+// up. Only trustworthy when the log actually starts/ends on the ground -
+// null (falling back to the flat MSL threshold) otherwise.
+function deriveFieldElevations(states){
+  const first = states[0], last = states[states.length-1];
+  return {
+    departure: isOnGround(first) ? first.alt : null,
+    arrival: isOnGround(last) ? last.alt : null
+  };
+}
+
+// The "on approach, too fast" check is about the arrival phase, but an
+// absolute low-altitude band alone can't tell a descent into the field
+// apart from a normal initial climb-out passing through the same band on
+// the way up - especially once the aircraft-category speed limit is tight
+// (a Category A aircraft's ~90kt threshold is exceeded by almost any
+// departure climb). Gate it to states after top-of-climb (first time the
+// aircraft got within 500ft of its filed cruise altitude) so it only ever
+// looks at the descent/arrival side of the flight.
+function deriveTopOfClimbLineIndex(states, cruiseAlt){
+  if(!cruiseAlt) return null;
+  const s = states.find(s => s.alt >= cruiseAlt - 500);
+  return s ? s.lineIndex : null;
+}
+
+// [PlayerState]'s raw xpdr string is "6400(On)" / "1200(Off)" - only the
+// On/Off half matters for the takeoff-squawk check below, so this doesn't
+// split out the squawk code itself (that split would be new, unneeded work).
+function xpdrOn(state){
+  return !!state && /\(On\)/i.test(state.xpdr);
+}
+
+// Players sometimes forget to squawk on an IFR departure. Off while
+// parked/taxiing (squawk 1200/standby) is completely normal - reuses the
+// same isOnGround/firstAirborneState liftoff anchor as the ground-clearance
+// timing checks in evaluateExchange, so only post-liftoff samples count.
+// Requires XPDR_MIN_OFF_SAMPLES consecutive Off samples right after liftoff
+// before flagging, so a single glitchy/transient sample doesn't false-alarm.
+// Returns null if there's no ground state to anchor to (see hFlightNote -
+// a log that starts mid-flight has nothing to measure "after takeoff" from).
+const XPDR_MIN_OFF_SAMPLES = 3;
+function deriveTransponderAlert(states){
+  const first = states[0];
+  if(!isOnGround(first)) return null;
+  const airborne = firstAirborneState(states, first);
+  if(!airborne) return null;
+  const postLiftoff = states.slice(states.indexOf(airborne));
+  let offRun = 0, sustained = false, turnedOnAt = null;
+  for(const s of postLiftoff){
+    if(xpdrOn(s)){ turnedOnAt = s; break; }
+    offRun++;
+    if(offRun >= XPDR_MIN_OFF_SAMPLES) sustained = true;
+  }
+  if(!sustained) return null;
+  return { liftoffTime: airborne.timeMin, turnedOnTime: turnedOnAt ? turnedOnAt.timeMin : null };
+}
+
+function evaluateExchange(ex, cfg){
+  const results = []; // list of {type, status, label}
+  const startState = ex.atc.state;
+  const win = ex.windowStates;       // short window, for speed/vs/display
+  const hdgWin = ex.hdgWindowStates; // until superseded by a new heading clearance
+  const altWin = ex.altWindowStates; // until superseded by a new altitude clearance
+
+  // ---- HEADING ----
+  if(ex.clearance.heading){
+    const target = ex.clearance.heading.targetHdg;
+    // "Leave (FIX) heading (XXX)" doesn't take effect until the aircraft
+    // actually leaves the named fix (see parseHeadingClearance) - anchor
+    // timing there instead of the instant of the radio call, same pattern
+    // as the ground-clearance liftoff anchor just below for altitude. Falls
+    // back to the instruction's own state if the fix was never left within
+    // this window (or for every other heading phrasing, which takes effect
+    // immediately).
+    const fixLeftState = ex.clearance.heading.fixTriggered
+      ? firstStateAfterLeavingFix(hdgWin, ex.clearance.heading.fixName)
+      : null;
+    // Whether the fix-trigger condition never fired within this window at
+    // all (aircraft was still inbound to the fix the whole time) - distinct
+    // from "fired, then the aircraft didn't turn." A flat heading before
+    // leaving the named fix is just normal enroute tracking, not a stalled
+    // turn - see the sustainedNonProgress guard below, which must not
+    // mistake "hasn't started yet" for "started and never moved."
+    const hdgTriggerPending = !!(ex.clearance.heading.fixTriggered && !fixLeftState);
+    const hdgProgressStart = ex.clearance.heading.fixTriggered
+      ? (fixLeftState || startState)
+      : startState;
+    let compliedAt = null;
+    for(const s of hdgWin){
+      if(headingDiff(s.hdg, target) <= cfg.hdgTol){ compliedAt = s; break; }
+    }
+    const finalState = hdgWin.length ? hdgWin[hdgWin.length-1] : startState;
+    const finalDiff = finalState ? headingDiff(finalState.hdg, target) : null;
+    if(compliedAt){
+      // A flat response-delay allowance is fair for a 10 deg nudge but
+      // unfair for a full reversal - standard rate turn (Pilot/Controller
+      // Glossary: 3 deg/sec) means a 170 deg turn takes ~57s of physical
+      // turning alone, on top of normal recognition/radio lag. Add that
+      // physical-turn time to the base allowance instead of judging every
+      // heading change against the same number regardless of size.
+      const delay = hdgProgressStart ? compliedAt.timeMin - hdgProgressStart.timeMin : null;
+      const expectedMax = cfg.responseDelayMax + (hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target)/180 : 0);
+      const responseStatus = (delay!=null && delay > expectedMax) ? 'warn' : 'ok';
+      // Reaching the assigned heading once isn't the same as holding it.
+      // BeyondATC will sometimes re-vector ("correct") a player who has
+      // drifted off a heading they'd already complied with - the tool
+      // needs to show that the player drifted in the first place, not
+      // just silently judge whatever correction instruction comes next on
+      // its own with no record of why it was needed. Confirmed against
+      // real logs: three separate cases (Player.log, Player - ATC forgot
+      // me.log, Player (2).log) had a heading reported "reached" that
+      // then wandered back off target before the next instruction,
+      // invisible under the old check. Measured only while still actually
+      // flying (hasStoppedFlying filtered out) - after landing, normal
+      // taxi turns are unrelated to an airborne heading clearance and
+      // produced a stark false positive otherwise (Player (8).log: a 177°
+      // "drift" that was actually just taxiing clear of the runway after
+      // a fully compliant ILS approach and landing - isOnGround's spd/gs<5
+      // gate didn't catch it, since that taxi roll never dropped below
+      // 11kt groundspeed).
+      const compliedIdx = hdgWin.indexOf(compliedAt);
+      const afterCompliance = hdgWin.slice(compliedIdx+1).filter(s => !hasStoppedFlying(s));
+      let worstDrift = null;
+      for(const s of afterCompliance){
+        const d = headingDiff(s.hdg, target);
+        if(d > cfg.hdgTol && (!worstDrift || d > headingDiff(worstDrift.hdg, target))) worstDrift = s;
+      }
+      if(worstDrift){
+        const driftDiff = Math.round(headingDiff(worstDrift.hdg, target));
+        const status = driftDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
+        results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
+      } else {
+        // "reached" (not a bare checkmark + number) so it's unambiguous
+        // this is a completed, already-observed turn - "HDG 60 in ~2m"
+        // alone could read as either "took 2m to comply" or "will comply
+        // in 2m."
+        results.push({type:'HDG', status: responseStatus, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}`});
+      }
+    } else if(finalDiff!=null){
+      // Was the aircraft actually closing the gap toward the target at the
+      // point this clearance got superseded by a newer one? Mirrors the
+      // ALT 'maintain' progress check above - judged by whether the
+      // angular gap narrowed, not by the assigned turn direction, since a
+      // "fly heading X" / "leave FIX heading X" clearance carries no
+      // direction at all (parseHeadingClearance).
+      const startDiff = hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target) : null;
+      const progressing = startDiff!=null && finalDiff < startDiff - cfg.hdgTol;
+      if(ex.hdgSuperseded && progressing){
+        // Not a violation: ATC issued a new heading before this one was
+        // reached, and the aircraft was correctly turning that way. The
+        // heading it eventually settled on belongs to whatever moment
+        // superseded this clearance, not to this instruction's own
+        // readback - carried over separately (see the recompute() pass
+        // below) and surfaced on the superseding exchange instead, same
+        // pattern as the ALT carryover above.
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward target, superseded before reaching it`, carryover:{targetHdg:target}});
+      } else {
+        // A clearance superseded by ATC before it ran its course is never
+        // a hard "bad" - whatever the aircraft was doing when interrupted
+        // is moot the instant a new instruction takes over (same
+        // reasoning as the ALT else-branch above, which drops its own
+        // magnitude check entirely once superseded). A single sample
+        // caught mid-handoff (see the N228KS 020->030 same-minute
+        // controller handoff that motivated this) isn't a settled outcome
+        // to judge against, so this no longer uses a bare degree cutoff
+        // (previously `finalDiff <= 30`) to decide whether to soften it.
+        // But several samples, all showing the same lack of turn, IS a
+        // settled outcome - not a timing artifact, just confirmation the
+        // aircraft never responded before ATC moved on (found against a
+        // real log: AAL3264 held heading flat through two consecutive
+        // clearances, confirmed by 4+ samples each, right up to being
+        // cleared for the approach). Require >=2 confirming samples so
+        // this can't fire off the same single-sample snapshot the warn
+        // softening above exists to protect against. Measured from
+        // hdgProgressStart onward, not the raw window start - for a
+        // fixTriggered clearance the window can include samples from
+        // before the fix was ever reached, which would read as "flat" for
+        // a completely unrelated reason (still tracking the inbound course
+        // to the fix, not stalled after the turn was due). Skipped
+        // entirely when the trigger never fired in this window
+        // (hdgTriggerPending) - "never got the chance to start" isn't
+        // "started and never moved" (confirmed against a real log: Delta
+        // 2201's "leave SURYP heading 165" was superseded while still
+        // inbound to SURYP - lastFix never once showed SURYP - so its flat
+        // ~176° the whole time is just the aircraft still flying its
+        // approach course, not evidence it ignored the clearance).
+        const spreadWin = hdgWin.filter(s => s.lineIndex >= hdgProgressStart.lineIndex);
+        const hdgSpread = spreadWin.length ? Math.max(...spreadWin.map(s=>headingDiff(s.hdg, spreadWin[0].hdg))) : 0;
+        const sustainedNonProgress = !hdgTriggerPending && spreadWin.length >= 2 && hdgSpread <= cfg.hdgTol;
+        const actual = Math.round(finalState.hdg);
+        const diff = Math.round(finalDiff);
+        const status = ex.hdgSuperseded
+          ? (sustainedNonProgress ? 'bad' : 'warn')
+          : (finalDiff <= cfg.hdgTol*2 ? 'warn' : 'bad');
+        // Narrative framing instead of bare "off by X°" math - names
+        // assigned vs. actual as a short sentence instead of two numbers
+        // the reader has to mentally diff. diagram data drives the compass
+        // visual rendered in the strip detail view (renderStrip/
+        // headingCompassBlock).
+        results.push({type:'HDG', status, label:`Assigned ${target}° — rolled out on ${actual}° instead, ${diff}° off`, diagram:{target, actual, status}});
+      }
+    } else {
+      results.push({type:'HDG', status:'warn', label:`HDG ${target} — no data`});
+    }
+  }
+
+  // ---- ALTITUDE ----
+  if(ex.clearance.altitude){
+    const { action, targetFt, atDiscretion, pointRestriction, viaProcedure, untilEstablished } = ex.clearance.altitude;
+    if(viaProcedure){
+      // "Climb via SID" / "descend via STAR" (see parseAltitudeClearance) -
+      // no single targetFt exists to check compliance against, since the
+      // procedure's own charted restrictions aren't data this tool has.
+      // Same honest "not independently verified" treatment as
+      // pointRestriction below, rather than silently emitting nothing (the
+      // old failure mode this phrasing had before it was recognized at
+      // all) or guessing a target from it. Deliberately skips the rest of
+      // the ALT block (no targetFt to run compliedAt/bust logic against)
+      // but still falls through to the V/S and SPD checks below, which
+      // don't depend on having a target.
+      results.push({type:'ALT', status:'ok', label:`${action==='climb'?'Climb':'Descend'} via procedure — not independently verified from available states`});
+    } else {
+    let compliedAt = null;
+    for(const s of altWin){
+      if(Math.abs(s.alt - targetFt) <= cfg.altTol){ compliedAt = s; break; }
+    }
+    const finalState = altWin.length ? altWin[altWin.length-1] : startState;
+    // A "bust" = the aircraft passed through the assigned altitude in the
+    // wrong direction (descended below a descend target, or climbed above
+    // a climb target) at some point while the clearance was in effect.
+    let bust = false;
+    if(action==='descend'){
+      for(const s of altWin){ if(s.alt < targetFt - cfg.altTol*2){ bust = true; break; } }
+    } else if(action==='climb'){
+      for(const s of altWin){ if(s.alt > targetFt + cfg.altTol*2){ bust = true; break; } }
+    }
+    // A single sample beyond the bust threshold, IMMEDIATELY followed by a
+    // return to within tolerance, is normal altitude-capture behavior
+    // (overshoot-then-correct is routine, especially on a VS-based climb
+    // without proper capture logic), not a violation - the `bust` branch
+    // below is meant for a deviation the aircraft never recovers from, not
+    // a brief transient corrected before this window even ends. `bust` is
+    // gated on `!compliedAt` so a later compliant sample takes priority
+    // over an earlier transient overshoot; if the aircraft is compliant
+    // ANYWHERE in the window, it falls through to the ordinary compliedAt
+    // branch below (which, via the existing post-compliance drift check,
+    // still fully accounts for a LATER genuine drift away from target -
+    // it just correctly attributes that drift to when it actually
+    // happened instead of mislabeling the transient capture overshoot as
+    // "the" violation). Found and fixed against a real log:
+    // `Player - recent.log`'s VNC713 was assigned "continue climb to
+    // FL080" at 2,255ft, transiently touched 8,683ft eight minutes later,
+    // then immediately corrected to ~8,020ft and flew accurately there for
+    // over 30 minutes - the old unconditional `bust` check reported this
+    // as a flat "overshot / busted altitude," which was actively wrong at
+    // the moment it was issued (the aircraft WAS correctly at 8,000, per
+    // the user who caught this). The real story, now correctly surfaced by
+    // falling through to the drift check instead: the aircraft later
+    // genuinely drifted down to 6,988ft (FL069) over a long, sparsely-
+    // sampled gap, caught only when ATC's own automated correction script
+    // (`CruiseAltitudeCorrectScript` in the raw log) noticed and reissued
+    // the climb - a real, later violation the old bust-priority logic was
+    // completely masking, not a false positive to be softened away.
+    if(bust && compliedAt) bust = false;
+    // A climb clearance like "climb via SID except maintain X" is often
+    // delivered at the gate, long before pushback/taxi/takeoff. Measuring
+    // delay or "progress" from that parked moment would make a routine
+    // ground hold look like a slow or stalled climb. Once airborne, anchor
+    // those comparisons to the actual liftoff state instead.
+    const liftoffState = isOnGround(startState) ? firstAirborneState(altWin, startState) : null;
+    // Whether a ground-issued clearance's liftoff trigger never fired in
+    // this window (still parked/taxiing the whole time) - "never got
+    // airborne to start climbing" isn't "got airborne and never climbed".
+    // See the matching hdgTriggerPending guard above.
+    const altLiftoffPending = isOnGround(startState) && !liftoffState;
+    const progressStart = isOnGround(startState) ? (liftoffState || startState) : startState;
+    if(bust){
+      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — overshot / busted altitude`});
+    } else if(compliedAt){
+      const delay = progressStart ? compliedAt.timeMin - progressStart.timeMin : null;
+      // A big altitude change simply takes longer to fly than a small one -
+      // a flat "reach it within N minutes" bar (shared with the heading/
+      // readback timing checks) flagged large, entirely normal climbs and
+      // descents as "slow" just for covering more altitude. Same pattern
+      // as the HDG timing check just below: a flat base allowance (so any
+      // small, prompt change is never penalized) plus extra time scaled to
+      // the size of the change - NOT a bare average rate (altChange/delay),
+      // which a short response lag (recognizing the call, dialing in the
+      // new altitude) can easily tank for a SMALL change: a 1,300ft
+      // step-down completed in 2 minutes is fast by any normal reading,
+      // even though the resulting average works out under a rate meant for
+      // judging sustained multi-thousand-foot climbs, not a quick nudge.
+      const altChange = progressStart ? Math.abs(targetFt - progressStart.alt) : null;
+      const expectedMax = cfg.responseDelayMax + (altChange!=null ? altChange/cfg.altMinRate : 0);
+      const slow = delay!=null && delay > expectedMax;
+      // "At pilot's discretion" hands timing control to the pilot (see note
+      // on parseAltitudeClearance) - don't let a deliberate delay flag as a
+      // slow response, but still note why it wasn't penalized when it would
+      // otherwise have been.
+      const responseStatus = (slow && !atDiscretion) ? 'warn' : 'ok';
+      const note = slow && atDiscretion ? ` (pilot's discretion, ~${delay}m)` : (delay!=null ? ` in ~${delay}m` : '');
+      // Reaching the assigned altitude once isn't the same as holding it -
+      // same reasoning as the HDG drift check above. Skipped entirely for
+      // "maintain X UNTIL ESTABLISHED" (untilEstablished): continuing past
+      // the interim altitude once established on the approach is the
+      // explicitly expected outcome of flying the ILS, not a deviation
+      // (confirmed against a real log: Player (5).log's "maintain 1,700
+      // until established" correctly kept descending to 1,346ft right
+      // after reaching 1,700 - localizer capture working as intended, not
+      // drift). Also stops once the aircraft is no longer flying
+      // (hasStoppedFlying), mirroring the HDG guard - normal ground
+      // movement after landing isn't a maintained-altitude deviation.
+      let worstDrift = null;
+      if(!untilEstablished){
+        const compliedIdx = altWin.indexOf(compliedAt);
+        const afterCompliance = altWin.slice(compliedIdx+1).filter(s => !hasStoppedFlying(s));
+        for(const s of afterCompliance){
+          const d = Math.abs(s.alt - targetFt);
+          if(d > cfg.altTol && (!worstDrift || d > Math.abs(worstDrift.alt - targetFt))) worstDrift = s;
+        }
+      }
+      if(worstDrift){
+        const driftFt = Math.round(worstDrift.alt - targetFt);
+        const status = Math.abs(driftFt) <= cfg.altTol*2 ? 'warn' : 'bad';
+        const dir = driftFt > 0 ? 'climbed to' : 'descended to';
+        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`});
+      } else {
+        // "reached" (not a bare checkmark + number) so it's unambiguous
+        // this is a completed, already-observed climb/descent - "35,000
+        // in ~20m" alone could read as either "took 20m" or "will take
+        // 20m."
+        results.push({type:'ALT', status: responseStatus, label:`ALT ${targetFt.toLocaleString()} — reached${note}`});
+      }
+    } else if(finalState){
+      const diff = finalState.alt - targetFt;
+      // Was the aircraft actually moving the right direction (toward the
+      // target) at the point this clearance got superseded by a newer one?
+      // A bare "maintain X" (e.g. "then as filed, maintain 5,000" in a gate
+      // SID clearance) doesn't say climb or descend, so judge it by
+      // whether the gap to the target closed, not by direction.
+      const progressing = progressStart && (
+        (action==='descend' && finalState.alt < progressStart.alt - cfg.altTol) ||
+        (action==='climb'   && finalState.alt > progressStart.alt + cfg.altTol) ||
+        (action==='maintain' && Math.abs(finalState.alt - targetFt) < Math.abs(progressStart.alt - targetFt) - cfg.altTol)
+      );
+      if(pointRestriction){
+        // A "cross FIX at/above/below ALTITUDE" restriction only matters
+        // exactly at that fix (see parseAltitudeClearance) - once the
+        // aircraft is past it, continuing to climb/descend away from this
+        // number is normal, expected flight, not a compliance problem.
+        // No compliedAt match here just means none of this window's
+        // samples happened to land within tolerance while passing the
+        // fix, not that the restriction was missed - judging that as
+        // "stayed high/low" or busted would be exactly the wrong guess
+        // the bust-check above already deliberately avoids; this extends
+        // the same reasoning to this fallback instead of contradicting it.
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — crossing restriction (not independently verified from available states)`});
+      } else if(ex.altSuperseded && progressing){
+        // Not a violation: ATC simply issued a new altitude before this one
+        // was reached, and the aircraft was correctly headed that way. The
+        // altitude/time it eventually reached belongs to whatever moment
+        // superseded this clearance, not to this instruction or its
+        // readback - citing it here (with no evidence for it anywhere in
+        // this exchange's own detail view) reads as if it happened right
+        // at the readback, which it didn't. That reading is carried over
+        // separately (see the recompute() pass below) and surfaced on the
+        // superseding exchange itself instead.
+        // action is the ATC-assigned verb, not the observed trajectory - a
+        // bare "maintain X" (e.g. "maintain 3,000 until established") names
+        // neither climb nor descend, so it must not default to "climbing"
+        // the way a two-way ternary would. Found against a real log:
+        // `Player - aircraft not recognized and ALT 3000 still climbing
+        // toward target but wrong.log`'s "maintain 3,000 until established"
+        // was issued at 4,027ft and the aircraft was verified (live
+        // EXCHANGES/altWindowStates) descending the whole window -
+        // 3,848->3,625->3,452->3,385->3,303->3,183ft - before being
+        // superseded by the landing clearance; the old code still labeled
+        // it "still climbing toward target" since 'maintain' isn't
+        // 'descend'.
+        const progressVerb = action==='descend' ? 'still descending toward target' : action==='climb' ? 'still climbing toward target' : 'still approaching target';
+        const progress = isOnGround(startState) ? 'parked when issued' : progressVerb;
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, superseded before reaching it`, carryover:{targetFt}});
+      } else {
+        let label;
+        if(action==='descend' && diff > cfg.altTol){
+          label = `ALT ${targetFt.toLocaleString()} — stayed high, ended ${Math.round(finalState.alt).toLocaleString()}ft (+${Math.round(diff)}ft)`;
+        } else if(action==='climb' && diff < -cfg.altTol){
+          label = `ALT ${targetFt.toLocaleString()} — stayed low, ended ${Math.round(finalState.alt).toLocaleString()}ft (${Math.round(diff)}ft)`;
+        } else {
+          label = `ALT ${targetFt.toLocaleString()} — ended ${Math.round(finalState.alt).toLocaleString()}ft`;
+        }
+        // Same reasoning as the HDG else-branch above: a superseded
+        // clearance is normally softened to warn since one sample caught
+        // mid-handoff isn't a settled outcome, but multiple samples all
+        // confirming the aircraft never moved toward the target IS settled
+        // - that's not an artifact of bad timing, it's confirmation the
+        // descent/climb never started before ATC moved on. Found against a
+        // real log: AAL3264 was given "descend and maintain 4,000" then
+        // "descend and maintain 3,500" back to back and never left level
+        // flight through either one (4 confirming samples each), superseded
+        // straight into a visual approach clearance while ~2,000ft high.
+        // Measured from progressStart onward (not the raw window start) and
+        // skipped entirely while altLiftoffPending, mirroring the HDG
+        // fixTriggered guard above - a ground clearance superseded before
+        // the aircraft ever lifted off hasn't had its climb opportunity
+        // start yet, so a flat altitude there is expected, not a stall.
+        const altSpreadWin = altWin.filter(s => s.lineIndex >= progressStart.lineIndex);
+        const flatRange = altSpreadWin.length ? Math.max(...altSpreadWin.map(s=>s.alt)) - Math.min(...altSpreadWin.map(s=>s.alt)) : 0;
+        const sustainedNonProgress = !altLiftoffPending && altSpreadWin.length >= 2 && flatRange <= cfg.altTol;
+        const status = ex.altSuperseded ? (sustainedNonProgress ? 'bad' : 'warn') : 'bad';
+        results.push({type:'ALT', status, label});
+      }
+    }
+    }
+  }
+
+  // approachAltThreshold is meant as an AGL figure ("on approach" means
+  // near the field, not near sea level) - offset it by the arrival field
+  // elevation derived from the log itself when available, so a high-
+  // elevation airport (e.g. KGPI ~2977ft) doesn't read as "always below
+  // 1000ft" and silently disable this check.
+  // Default 1000ft AGL matches the FAA/industry stabilized-approach gate
+  // (Airbus/FAA Flight Ops Briefing Note "Flying Stabilized Approaches":
+  // aircraft must be at target approach speed by 1000ft AGL in IMC, 500ft
+  // in VMC - no visibility data here to tell which, so the more permissive
+  // 1000ft gate is used). Below that height, still being well above the
+  // category's approach speed is a real compliance signal. Above it - even
+  // just below the old 3000ft default - being faster than Vref-based
+  // approach speed is completely normal: real aircraft are still
+  // configuring/slowing through that band (a jet at ~2,900ft AGL and
+  // ~10nm from touchdown sits almost exactly on a standard 3° glideslope,
+  // nowhere near stabilized yet), so checking there produced false
+  // positives on two separate real logs before this was verified against
+  // the source. Shared by both the V/S and SPD checks below - hoisted here
+  // since V/S needs it too now (see the final-approach sink-rate check).
+  const approachAltAbs = cfg.arrivalFieldElevation != null ? cfg.arrivalFieldElevation + cfg.approachAltThreshold : cfg.approachAltThreshold;
+
+  // ---- VERTICAL SPEED (while this altitude clearance is in effect) ----
+  // Two genuinely different contexts, judged separately rather than by one
+  // flat ceiling across the whole window:
+  //  - Below ~1,000ft AGL (final approach) - excessive SINK rate here is a
+  //    well-established, UNIVERSAL safety criterion, not a per-category
+  //    performance question: the FAA's 1995 bulletin (following an NTSB
+  //    recommendation after a Jetstream 31 CFIT accident) and the Flight
+  //    Safety Foundation's ALAR Briefing Note 7-1 both cite >1,000fpm
+  //    inside the final approach segment as cause to consider a go-around
+  //    - "a human perceptual limitation... independent of the type of
+  //    airplane or helicopter," per FSF - so cfg.approachVsLimit is flat
+  //    across every category, unlike vsWarn/vsBad below. Descent only
+  //    (not climb) - this specific criterion is about sink rate on the way
+  //    down, not a go-around climb-out through the same altitude band.
+  //  - Everywhere else (enroute) - no regulatory ceiling exists at all for
+  //    either direction (see the CATEGORY_PERFORMANCE comment above) -
+  //    vsWarn/vsBad stay a per-category judgment call, now informed by
+  //    real performance data instead of an unguided guess.
+  const vsWin = ex.clearance.altitude ? altWin : win;
+  if(vsWin.length >= 2){
+    let mostNegativeVsFinal = 0, maxAbsVsEnroute = 0;
+    for(let i=1;i<vsWin.length;i++){
+      const dt = vsWin[i].timeMin - vsWin[i-1].timeMin;
+      if(dt<=0) continue;
+      const vs = (vsWin[i].alt - vsWin[i-1].alt) / dt;
+      const pastTopOfClimb = cfg.topOfClimbLineIndex==null || vsWin[i].lineIndex > cfg.topOfClimbLineIndex;
+      const onFinalApproach = pastTopOfClimb && vsWin[i].alt < approachAltAbs;
+      if(onFinalApproach){
+        // A single average across a multi-minute sampling gap isn't
+        // reliable evidence of a SUSTAINED excessive sink rate the way it
+        // might be for the far more generously-thresholded enroute check
+        // below - confirmed against a real false positive (Player (2).log:
+        // one pair 3 minutes apart averaged to ~1,032fpm, barely over this
+        // check's 1,000fpm limit, while every other sample in the same
+        // window showed the aircraft essentially level). BeyondATC's own
+        // [PlayerState] sampling is instruction-coupled and commonly gaps
+        // right in this exact altitude band (documented elsewhere in this
+        // file) - a real data limitation, not something a threshold value
+        // can fix, so this specific check only trusts closely-spaced pairs.
+        if(dt <= 1 && vs < mostNegativeVsFinal) mostNegativeVsFinal = vs;
+      } else {
+        if(Math.abs(vs) > Math.abs(maxAbsVsEnroute)) maxAbsVsEnroute = vs;
+      }
+    }
+    if(Math.abs(mostNegativeVsFinal) > cfg.approachVsLimit){
+      results.push({type:'V/S', status:'bad', label:`Excessive sink rate on approach — reached ~${Math.round(Math.abs(mostNegativeVsFinal)).toLocaleString()}fpm descending below ${Math.round(approachAltAbs).toLocaleString()}ft (stabilized-approach limit ${cfg.approachVsLimit}fpm)`});
+    }
+    if(Math.abs(maxAbsVsEnroute) > cfg.vsWarn){
+      const status = Math.abs(maxAbsVsEnroute) > cfg.vsBad ? 'bad' : 'warn';
+      // Narrative framing to match HDG/ALT ("Assigned X - rolled out on Y
+      // instead") instead of a bare number with no reference point - names
+      // which threshold was crossed (reusing the exact "caution"/
+      // "violation" wording already used for these fields in the
+      // Thresholds panel) and the climb/descend direction, rather than
+      // leaving the reader to infer both from a signed fpm number alone.
+      const vsDirection = maxAbsVsEnroute > 0 ? 'climbing' : 'descending';
+      const vsThresholdLabel = status === 'bad' ? 'violation' : 'caution';
+      const vsThresholdVal = status === 'bad' ? cfg.vsBad : cfg.vsWarn;
+      results.push({type:'V/S', status, label:`Vertical speed ${vsThresholdLabel} threshold ${vsThresholdVal.toLocaleString()}fpm — reached ~${Math.round(Math.abs(maxAbsVsEnroute)).toLocaleString()}fpm ${vsDirection}`});
+    }
+  }
+
+  // ---- SPEED (while this clearance is in effect - use the longer of the
+  // altitude/heading windows so a descent's speed is checked all the way
+  // through, not just until the next radio call) ----
+  const spdWin = ex.clearance.altitude ? altWin : (ex.clearance.heading ? hdgWin : win);
+  if(spdWin.length){
+    let worst250=null, worstApp=null;
+    for(const s of spdWin){
+      if(s.alt < 10000 && s.spd > cfg.speedBelow10k){
+        if(!worst250 || s.spd>worst250.spd) worst250=s;
+      }
+      const pastTopOfClimb = cfg.topOfClimbLineIndex==null || s.lineIndex > cfg.topOfClimbLineIndex;
+      if(s.inVector && pastTopOfClimb && s.alt < approachAltAbs && s.spd > cfg.approachSpeedLimit){
+        if(!worstApp || s.spd>worstApp.spd) worstApp=s;
+      }
+    }
+    // Narrative framing (limit vs. actual, named the same way as the config
+    // panel's own field labels: "Speed limit below 10,000ft", "Approach
+    // speed target") instead of a bare "Xkt (limit Ykt)" the reader has to
+    // mentally diff - matches the HDG/ALT "assigned vs. actual" pattern
+    // above.
+    if(worst250){
+      const over = Math.round(worst250.spd - cfg.speedBelow10k);
+      results.push({type:'SPD', status:'bad', label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`});
+    }
+    if(worstApp){
+      const over = Math.round(worstApp.spd - cfg.approachSpeedLimit);
+      results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`});
+    }
+    if(ex.clearance.landing){
+      const last = win[win.length-1];
+      if(last && last.spd > cfg.landingSpeedLimit){
+        const over = Math.round(last.spd - cfg.landingSpeedLimit);
+        results.push({type:'SPD', status:'warn', label:`Landing speed target ≤${cfg.landingSpeedLimit}kt — reached ${Math.round(last.spd)}kt (+${over}kt over)`});
+      }
+    }
+  }
+
+  // ---- SPEED (assigned-target compliance, mirroring ALT/HDG's compliedAt
+  // + post-compliance-drift pattern) ----
+  // Everything above this point only checks flat/universal speed limits
+  // (250kt below 10,000ft, category-based approach/landing speed) - none of
+  // it looks at whether the aircraft actually complied with an ATC-assigned
+  // "reduce/increase speed to X" instruction, or kept holding it. That was
+  // a real, total gap (not just a false negative in one edge case): before
+  // this section existed, `ex.clearance.speed` was read in exactly one
+  // place in the whole file (the `hasTarget` flag used only to decide
+  // whether a readback was expected) and nowhere else - a genuine "player
+  // initially complies with a speed restriction then stops following it
+  // partway through" case (the user's own report) had no path to ever be
+  // caught. Confirmed against a real log (`2026-08-03(EIDW-EGNT).log`,
+  // Ryanair 15XV): before the parseSpeedClearance fix above, all four real
+  // speed clearances in that log ("reduce speed 220 kts", "increase speed
+  // 240 kts", "reduce speed 180 kts", plus a "resume normal speed"
+  // cancellation) parsed to `null` and produced zero eval results.
+  if(ex.clearance.speed){
+    const { targetKt, action } = ex.clearance.speed;
+    const spdWinFull = ex.spdWindowStates;
+    const compliedAt = spdWinFull.find(s => Math.abs(s.spd - targetKt) <= cfg.spdTol);
+    if(compliedAt){
+      // Response timing: same base-allowance-plus-scaling pattern as ALT/
+      // HDG (see those sections' comments for why a bare rate ratio fails
+      // on both small-quick and large-normal changes) - spdChangeRate plays
+      // the same role altMinRate does for ALT.
+      const delay = startState ? compliedAt.timeMin - startState.timeMin : null;
+      const spdChange = startState ? Math.abs(targetKt - startState.spd) : null;
+      const expectedMax = cfg.responseDelayMax + (spdChange!=null ? spdChange/cfg.spdChangeRate : 0);
+      const slow = delay!=null && delay > expectedMax;
+      const responseStatus = slow ? 'warn' : 'ok';
+      const note = delay!=null ? ` in ~${delay}m` : '';
+      // Post-compliance drift: reaching the assigned speed once isn't the
+      // same as holding it, same reasoning as ALT/HDG - this is exactly
+      // the user's reported symptom (complies, then stops following it).
+      // hasStoppedFlying filters out ground/taxi speed the same way the
+      // ALT/HDG drift checks do.
+      const compliedIdx = spdWinFull.indexOf(compliedAt);
+      const afterCompliance = spdWinFull.slice(compliedIdx+1).filter(s => !hasStoppedFlying(s));
+      let worstDrift = null;
+      for(const s of afterCompliance){
+        const d = Math.abs(s.spd - targetKt);
+        if(d > cfg.spdTol && (!worstDrift || d > Math.abs(worstDrift.spd - targetKt))) worstDrift = s;
+      }
+      if(worstDrift){
+        const driftKt = Math.round(worstDrift.spd - targetKt);
+        const status = Math.abs(driftKt) <= cfg.spdTol*2 ? 'warn' : 'bad';
+        const dir = driftKt > 0 ? 'sped up to' : 'slowed to';
+        results.push({type:'SPD', status, label:`SPD ${targetKt}kt — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`});
+      } else {
+        results.push({type:'SPD', status: responseStatus, label:`SPD ${targetKt}kt — reached${note}`});
+      }
+    } else if(spdWinFull.length){
+      const finalSpd = spdWinFull[spdWinFull.length-1];
+      // Same "was it genuinely progressing when superseded" reasoning as
+      // ALT's action==='maintain' case - a plain "maintain X knots" says
+      // neither reduce nor increase, so judge it by whether the gap to
+      // target closed.
+      const progressing = startState && (
+        (action==='reduce' && finalSpd.spd < startState.spd - cfg.spdTol) ||
+        (action==='increase' && finalSpd.spd > startState.spd + cfg.spdTol) ||
+        (action==='maintain' && Math.abs(finalSpd.spd - targetKt) < Math.abs(startState.spd - targetKt) - cfg.spdTol)
+      );
+      if(ex.spdSuperseded && progressing){
+        const progressVerb = action==='reduce' ? 'still slowing toward target' : action==='increase' ? 'still speeding up toward target' : 'still adjusting toward target';
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetKt}kt — ${progressVerb}, superseded before reaching it`, carryover:{targetKt}});
+      } else {
+        const diff = Math.round(finalSpd.spd - targetKt);
+        const label = `SPD ${targetKt}kt — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
+        const status = ex.spdSuperseded ? 'warn' : 'bad';
+        results.push({type:'SPD', status, label});
+      }
+    }
+  }
+
+  // ---- RESPONSE DELAY (readback) ----
+  if(ex.readback && ex.readback.state && startState){
+    const d = ex.readback.state.timeMin - startState.timeMin;
+    if(d > cfg.responseDelayMax){
+      results.push({type:'RESP', status:'warn', label:`Readback delayed ~${d}m`});
+    }
+  } else if(!ex.readback && ex.hasTarget){
+    results.push({type:'RESP', status:'warn', label:`No readback captured`});
+  }
+
+  // overall
+  let overall = 'ok';
+  if(results.some(r=>r.status==='bad')) overall='bad';
+  else if(results.some(r=>r.status==='warn')) overall='warn';
+  if(!ex.hasTarget && results.length===0) overall='none';
+
+  return { results, overall };
+}
+
+// Evaluates a player self-report ("ready for descent") exchange (see
+// buildExchanges) - a completely different question from evaluateExchange
+// above, since there's no ATC-assigned target to check compliance
+// against. What matters here is timing: BeyondATC will not authorize a
+// descent just because the pilot reported ready (it waits until the
+// aircraft reaches its own calculated top-of-descent point), so holding
+// the reported altitude afterward is the correct, expected behavior. If
+// the aircraft descends anyway before ATC actually issues a real altitude
+// clearance (ex.reportWindowEndLineIndex, set in buildExchanges), that's
+// a genuine unauthorized deviation - the pilot jumped the gun rather than
+// waiting for clearance, exactly the kind of "player didn't follow ATC"
+// case this tool exists to catch, not softened the way a superseded
+// clearance is elsewhere (there's no clearance here to be superseded by -
+// the whole point is that none was ever issued).
+function evaluatePilotReport(ex, cfg){
+  const startAlt = ex.atc.state ? ex.atc.state.alt : null;
+  if(startAlt==null || !ex.windowStates.length){
+    return { results: [{type:'ALT', status:'ok', label:'Reported ready for descent — no further data to confirm or rule out an early descent'}], overall:'ok' };
+  }
+  let worst = null, worstDrop = 0;
+  for(const s of ex.windowStates){
+    const drop = startAlt - s.alt;
+    if(drop > cfg.altTol && drop > worstDrop){ worst = s; worstDrop = drop; }
+  }
+  if(worst){
+    const neverCleared = ex.reportWindowEndLineIndex === Infinity;
+    const label = `Reported ready for descent — descended ${Math.round(worstDrop).toLocaleString()}ft to ${Math.round(worst.alt).toLocaleString()}ft before ATC actually cleared it${neverCleared ? ' (never cleared for the rest of this log)' : ''}`;
+    return { results: [{type:'ALT', status:'bad', label}], overall:'bad' };
+  }
+  return { results: [{type:'ALT', status:'ok', label:'Reported ready for descent — held altitude until ATC cleared it'}], overall:'ok' };
+}
+
+/* ============================================================
+   DEFAULT CONFIG
+   ============================================================ */
+
+const DEFAULT_CFG = {
+  hdgTol: {v:5, label:'Heading tolerance', unit:'°'},
+  altTol: {v:150, label:'Altitude tolerance', unit:'ft'},
+  // Assigned-speed tolerance/response-scaling for the SPD compliance check
+  // in evaluateExchange (mirrors ALT/HDG's compliedAt+drift pattern) - see
+  // that section for the real-log gap this closes. No FAA/ICAO source
+  // defines either number (same situation as vsWarn/vsBad above), so both
+  // are a reasoned judgment call: spdTol=10kt matches the magnitude of
+  // hdgTol/altTol above and is consistent with the settled +-10kt
+  // oscillation band a real compliant approach-speed hold showed in
+  // `2026-08-03(EIDW-EGNT).log` after initially reaching its target.
+  // spdChangeRate is the expected-rate divisor used the same way altMinRate
+  // scales ALT's response-timing allowance for a large altitude change -
+  // 20kt/min is consistent with that same log's real reduce/increase
+  // clearances, which were flown within roughly that rate without
+  // speedbrakes.
+  spdTol: {v:10, label:'Speed tolerance', unit:'kt'},
+  spdChangeRate: {v:20, label:'Expected speed change rate', unit:'kt/min'},
+  vsWarn: {v:2500, label:'Vertical speed caution', unit:'fpm'},
+  vsBad: {v:3500, label:'Vertical speed violation', unit:'fpm'},
+  // Flat across every aircraft category, unlike vsWarn/vsBad above - the
+  // FAA's 1995 stabilized-approach bulletin and FSF ALAR Briefing Note 7-1
+  // both describe excessive sink rate below ~1,000ft AGL as "a human
+  // perceptual limitation... independent of the type of airplane or
+  // helicopter," not a per-category performance question (see
+  // evaluateExchange's V/S section).
+  approachVsLimit: {v:1000, label:'Stabilized-approach sink rate limit', unit:'fpm'},
+  speedBelow10k: {v:250, label:'Speed limit below 10,000ft', unit:'kt'},
+  approachAltThreshold: {v:1000, label:'"On approach" altitude', unit:'ft AGL~'},
+  approachSpeedLimit: {v:180, label:'Approach speed target', unit:'kt'},
+  landingSpeedLimit: {v:160, label:'Landing-clearance speed target', unit:'kt'},
+  responseDelayMax: {v:3, label:'Slow response threshold', unit:'min'},
+  altMinRate: {v:500, label:'Min. expected climb/descent rate', unit:'fpm'}
+};
+
+// FAA Pilot/Controller Glossary AIRCRAFT APPROACH CATEGORY bands (based on
+// 1.3x stall speed at max landing weight): A <91kt, B 91-121kt, C 121-141kt,
+// D 141-166kt, E >=166kt. A flat approach/landing speed default is wrong
+// across a fleet spanning a DA62 to a 777, so derive a per-flight number
+// from the aircraft's actual ICAO type (SimBrief already gives us this in
+// meta.actype) instead. Broadened one-time from an initial ~40 types (just
+// what appeared in real sample logs) to ~100 covering common MSFS
+// default/payware GA, turboprop, business jet, and airliner types - still
+// nowhere near the full ICAO Doc 8643 registry (thousands of types,
+// including military/glider/ultralight designators irrelevant here), so
+// this remains a curated subset, not a claim of universal coverage.
+// Light twins (DA62, PA34, PA44, BE58) are grouped with A rather than
+// split into their own tier, matching how DA62 was already classified
+// before this table grew - consistent within this table over matching
+// every real-world TERPS boundary exactly. Unrecognized types still fall
+// back to the flat DEFAULT_CFG value untouched (see hCatNote in loadLeg
+// for the always-visible warning that surfaces when that happens), so
+// growing this table is additive, never a regression for a type not yet
+// in it.
+const AIRCRAFT_APPROACH_CATEGORY = {
+  // A - light GA singles & light twins (<91kt)
+  C172:'A', C152:'A', C182:'A', C150:'A', C206:'A', C210:'A',
+  PA28:'A', PA32:'A', PA34:'A', PA44:'A',
+  SR20:'A', SR22:'A', DA20:'A', DA40:'A', DA42:'A', DA62:'A',
+  BE33:'A', BE36:'A', BE58:'A', M20P:'A', RV10:'A', AEST:'A',
+  // C208 (Cessna 208 Caravan) and PA24 (Piper Comanche 250) added after an
+  // audit prompted by the B733 gap below - both are in the user's own
+  // fleet (Black Square's Caravan variants, A2A Comanche 250) and were
+  // completely missing, silently falling back to DEFAULT_CFG's flat
+  // values. Verified against real stall/approach speed data, not guessed:
+  // C208 Vso 61kt (flaps 30) with an 80kt POH approach speed, PA24 Vso
+  // 58kt with a 71kt POH final-approach speed - both comfortably under
+  // the 91kt Category A/B threshold (1.3x Vso lands at ~79kt and ~75kt
+  // respectively).
+  C208:'A', PA24:'A',
+  // B - turboprops & light/midsize business jets (91-121kt)
+  P180:'B', TBM7:'B', TBM8:'B', TBM9:'B', PC12:'B', PC24:'B',
+  C525:'B', C56X:'B', C550:'B', C650:'B', C680:'B', C700:'B',
+  E50P:'B', E55P:'B', LJ35:'B', LJ45:'B', LJ60:'B',
+  C25A:'B', C25B:'B', C25C:'B', BE20:'B', B350:'B', H25B:'B',
+  GLF4:'B', GLF5:'B', GLEX:'B', CL30:'B', SF50:'B',
+  // Same audit, same fleet-driven gaps: BE60 (Beechcraft Duke, Black
+  // Square's "Piston Duke") and B60T (the distinct ICAO code for the
+  // "Royal Turbine Duke" PT6A conversion - Black Square's "Turbine Duke" -
+  // confirmed as its own doc8643 entry, not a reuse of BE60) - Duke's Vso
+  // is 76kt, putting 1.3x Vso at ~99kt, past the Category A boundary
+  // Baron 58 (BE58, a lighter/slower piston twin) sits under. C750
+  // (Cessna Citation X) was a real oversight, not just a missing fleet
+  // type - this file's own CATEGORY_PERFORMANCE comment above already
+  // cites a real Citation X/C750 POH climb table as supporting evidence,
+  // yet the type code itself was never added here; classified 'B'
+  // consistent with every other Citation model in this table (C525
+  // through C700) already being Category B regardless of size/range
+  // class. STAR (Beechcraft Starship, Black Square's fleet) is a
+  // pressurized turboprop twin bizliner in the same performance class as
+  // the King Air (BE20/B350) and P180 already listed here; the one
+  // approach-speed figure found (~120kt, pilot-forum sourced, not a POH)
+  // is consistent with Category B rather than a strong independent
+  // confirmation - flag this one for a better source if it ever matters.
+  BE60:'B', B60T:'B', C750:'B', STAR:'B',
+  // C - narrowbody jets (121-141kt)
+  // 737 Classic/Original series (731/732/733/734/735/736) added alongside
+  // the B733 fix below - same audit reasoning: if one 737 variant was
+  // silently missing, its siblings likely were too. All share the same
+  // approach-category speed band as the already-listed NG/MAX variants.
+  B731:'C', B732:'C', B733:'C', B734:'C', B735:'C', B736:'C',
+  B737:'C', B738:'C', B739:'C', B37M:'C', B38M:'C', B39M:'C',
+  A319:'C', A320:'C', A321:'C', A19N:'C', A20N:'C', A21N:'C',
+  E170:'C', E175:'C', E190:'C', E195:'C',
+  CRJ2:'C', CRJ7:'C', CRJ9:'C', CRJX:'C', B712:'C',
+  MD82:'C', MD83:'C', MD88:'C', F100:'C',
+  // D - widebody jets (141-166kt)
+  B762:'D', B763:'D', B764:'D', B772:'D', B773:'D', B77L:'D', B77W:'D',
+  B788:'D', B789:'D', B78X:'D', B742:'D', B743:'D', B744:'D', MD11:'D',
+  A332:'D', A333:'D', A339:'D', A342:'D', A343:'D', A345:'D', A346:'D',
+  A359:'D', A35K:'D',
+  // 747-8, A380, and An-225 were originally filed as Category E here, but
+  // verified published approach speeds put all three inside the Category D
+  // band (141-166kt), not above it: 747-8 158kt (FAA/Boeing "Reference Code
+  // and Approach Speeds for Boeing Aircraft," 30 Mar 2016 - D-V), A380
+  // ~152kt at max landing weight, An-225 ~150kt. No civil type in this
+  // table has a verified Vref >=166kt, so Category E currently has no
+  // members - CATEGORY_PERFORMANCE still defines it (kept for any aircraft
+  // added later that genuinely qualifies) but nothing maps to it today.
+  B748:'D', A388:'D', A225:'D'
+};
+
+// Coarse per-category performance envelope, same spirit as the approach-
+// speed bands above - not exact POH numbers (climb/descent rate varies
+// hugely by weight, altitude, and phase of flight even within one aircraft
+// type), just sanity floors/ceilings so a light single and a heavy jet
+// aren't held to the same absolute fpm figure.
+//
+// minClimbRate is the floor the ALT rate check (evaluateExchange) uses to
+// tell "slow because it's a small/light aircraft" from "stalled" - unlike
+// the fields below, this one now has a direct regulatory citation and is
+// flat across every category rather than guessed per-category: FAA AIM
+// paragraph 4-4-10(d) ("Adherence to Clearance") instructs pilots to climb
+// or descend "at a rate of between 500 and 1,500 fpm" once within 1,000ft
+// of the assigned altitude, and explicitly to advise ATC "if at any time
+// the pilot is unable to climb or descend at a rate of at least 500 feet
+// a minute" - a single universal floor, not scoped by aircraft type. The
+// old per-category guesses (300/800/1000/800/600) had no citation and
+// didn't even scale sensibly (Category D's 800 was below Category C's
+// 1000). DEFAULT_CFG.altMinRate already independently used this same
+// 500fpm value as its own flat fallback before this was verified.
+//
+// vsWarn/vsBad (the caution/violation ceiling for the ENROUTE portion of a
+// climb/descent - see the separate, flat, universal final-approach sink-
+// rate check in evaluateExchange for the final-approach portion) have NO
+// authoritative source at all - confirmed by checking both FAA AIM 4-4-10
+// (d), which explicitly leaves the bulk of a climb/descent to "an optimum
+// rate consistent with the operating characteristics of the aircraft," no
+// numeric ceiling given, and ICAO Doc 4444 section 4.7 ("Vertical Speed
+// Control Instructions"), which treats any specific climb/descent rate
+// ceiling as something ATC must explicitly assign per instruction, not a
+// standing background limit. So these remain a judgment call, same as
+// before - but now informed by real performance data instead of an
+// unguided guess, after the original numbers were confirmed too low
+// against real logs: `Player - untowered landing.log`'s P180 (Category B)
+// climbed at a routine 2,756fpm and was flagged "caution" under the old
+// vsWarn:2000 - but P180 Avanti II's own published sea-level ISA rate of
+// climb is ~2,770-2,950fpm (GlobalAir/AeroCorner/JetAv spec sheets), so
+// even a normal max-performance climb would have tripped "caution" before
+// covering any real distance. Real published numbers for other real
+// Category B members go well past that: Embraer Phenom 300 ~3,850-4,050
+// fpm, Learjet 35A ~4,340fpm (both at max takeoff weight, sea level, per
+// published specs) - Learjets in particular are well known for
+// exceptionally strong climb performance. Category C's ceiling is
+// grounded in FAA JO 7110.65BB paragraph 4-7-5(d)'s own NOTE, which is
+// controllers' standing assumption for planning purposes: "Turbojet en
+// route descents are based on a rate of descent of 4,000 to 6,000 feet
+// per minute" - i.e. that whole range is the FAA's own definition of
+// normal, not exceptional, for a narrowbody/jet descent. A real POH
+// example (Cessna Citation X / C750, `Other Manuals/C750 Climb
+// Tables.pdf`) independently confirms the same order of magnitude for
+// climb: published rates from ~1,000fpm (heavy, high altitude, hot day)
+// up past 4,500fpm (light, low altitude, cold day) for this ONE aircraft
+// type alone - a 4x+ spread from weight/altitude/temperature alone, which
+// is exactly why no single flat number can be "correct" for a whole
+// category the way approach-category speed can. All four ceilings below
+// are set with comfortable headroom above the real numbers found, since
+// the user specifically wants this to stay a secondary "something unusual
+// happened here" signal (e.g. evidence of a rushed catch-up climb after a
+// late-issued clearance) rather than a primary check that fires on normal
+// high performance - Category A is unchanged (no evidence found requiring
+// a revision, unlike B-D).
+const CATEGORY_PERFORMANCE = {
+  A: { approach:90,  minClimbRate:500, vsWarn:1500, vsBad:2200 },
+  B: { approach:120, minClimbRate:500, vsWarn:4750, vsBad:6000 },
+  C: { approach:140, minClimbRate:500, vsWarn:6500, vsBad:8000 },
+  D: { approach:165, minClimbRate:500, vsWarn:7000, vsBad:9000 },
+  E: { approach:180, minClimbRate:500, vsWarn:7000, vsBad:9000 }
+};
+
+// Reverse lookup (category -> example ICAO types) for the reference table,
+// built from AIRCRAFT_APPROACH_CATEGORY instead of hand-duplicated so it
+// can't drift out of sync when that table gains new types.
+const CATEGORY_EXAMPLES = {};
+for(const type in AIRCRAFT_APPROACH_CATEGORY){
+  const cat = AIRCRAFT_APPROACH_CATEGORY[type];
+  (CATEGORY_EXAMPLES[cat] = CATEGORY_EXAMPLES[cat] || []).push(type);
+}
+
+function categoryProfileForType(actype){
+  if(!actype) return null;
+  const cat = AIRCRAFT_APPROACH_CATEGORY[actype.toUpperCase()];
+  if(!cat) return null;
+  const p = CATEGORY_PERFORMANCE[cat];
+  return { category: cat, approach: p.approach, landing: Math.round(p.approach*0.9), minClimbRate: p.minClimbRate, vsWarn: p.vsWarn, vsBad: p.vsBad };
+}
+
+/* ============================================================
+   APP STATE + RENDER
+   ============================================================ */
+
+let PARSED = null, EXCHANGES = null, CFG = {};
+let ALL_LEGS = null, currentLegIndex = 0;
+let activeFilter = 'all';
+let searchTerm = '';
+
+function getCfgValues(){
+  const out = {};
+  for(const k in CFG) out[k]=CFG[k].v;
+  return out;
+}
+
+function recompute(){
+  const cfgv = getCfgValues();
+  cfgv.arrivalFieldElevation = PARSED.meta.fieldElevations ? PARSED.meta.fieldElevations.arrival : null;
+  cfgv.topOfClimbLineIndex = PARSED.meta.topOfClimbLineIndex;
+  EXCHANGES.forEach(ex=>{ ex.eval = ex.isPilotReport ? evaluatePilotReport(ex, cfgv) : evaluateExchange(ex, cfgv); });
+  // A clearance that was still in progress (not busted) when a later
+  // instruction superseded it gets a plain "superseded before reaching it"
+  // note on its OWN card (see evaluateExchange) - the altitude/time it
+  // eventually reached belongs to the moment it was superseded, not to
+  // this clearance's own readback, so surface that half of the story on
+  // the superseding exchange instead of backdating it onto this one.
+  // altSupersededByIdx/hdgSupersededByIdx are lineIndex values, not array
+  // positions (see buildExchanges) - look the superseding exchange up by
+  // lineIndex rather than indexing EXCHANGES directly, since player-report
+  // entries are interleaved chronologically and would otherwise shift
+  // everything after them out of position.
+  EXCHANGES.forEach(ex=>{
+    ex.eval.results.forEach(r=>{
+      if(r.type==='ALT' && r.carryover && ex.altSupersededByIdx!=null){
+        const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.altSupersededByIdx);
+        if(!supersedingEx) return;
+        const assignedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
+        supersedingEx.eval.results.push({
+          type:'ALT', status:'ok',
+          label:`Supersedes earlier ALT ${r.carryover.targetFt.toLocaleString()} clearance${assignedAt?` (assigned ${assignedAt})`:''}, still in progress`
+        });
+        if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
+      }
+      if(r.type==='HDG' && r.carryover && ex.hdgSupersededByIdx!=null){
+        const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.hdgSupersededByIdx);
+        if(!supersedingEx) return;
+        const assignedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
+        supersedingEx.eval.results.push({
+          type:'HDG', status:'ok',
+          label:`Supersedes earlier HDG ${r.carryover.targetHdg}° clearance${assignedAt?` (assigned ${assignedAt})`:''}, still in progress`
+        });
+        if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
+      }
+      if(r.type==='SPD' && r.carryover && ex.spdSupersededByIdx!=null){
+        const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.spdSupersededByIdx);
+        if(!supersedingEx) return;
+        const assignedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
+        supersedingEx.eval.results.push({
+          type:'SPD', status:'ok',
+          label:`Supersedes earlier SPD ${r.carryover.targetKt}kt clearance${assignedAt?` (assigned ${assignedAt})`:''}, still in progress`
+        });
+        if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
+      }
+    });
+  });
+  render();
+}
+
+function guessCallsign(events, callsignHints){
+  // BeyondATC logs a "Player Callsign: X" line with the ground-truth
+  // identifier. For tail-number-style callsigns (N452DA, VNC713 - all
+  // caps, no space before the digits) that's exactly the literal string
+  // used in ATC/pilot text, so prefer it whenever it actually shows up
+  // there. It's far more reliable than word-frequency guessing, which
+  // silently loses to common ATC phrases ("Wind 090", "Maintain 5") once
+  // the real callsign fails to match the word+digits pattern below - as
+  // any tail number always does, having no space before its digits.
+  if(callsignHints && callsignHints.length){
+    let bestHint=null, bestHintN=0;
+    callsignHints.forEach(hint=>{
+      const re = new RegExp('\\b'+escapeRegex(hint)+'\\b','g');
+      let n=0;
+      events.forEach(e=>{ const m=e.text.match(re); if(m) n+=m.length; });
+      if(n>bestHintN){ bestHintN=n; bestHint=hint; }
+    });
+    if(bestHint) return bestHint;
+  }
+  // Fallback: frequency-guess a "Word ####" style spoken callsign, for
+  // flights whose spoken form differs from the logged callsign (e.g. BAW1
+  // -> "Speedbird 1"). Allows an optional trailing letter suffix (Ryanair
+  // 15XV, Easy 19YD) since those also don't match a bare tail number.
+  const freq = {};
+  events.forEach(e=>{
+    const matches = e.text.match(/\b[A-Z][a-z]+ \d{1,5}[A-Z]{0,3}(?: Heavy)?\b/g);
+    if(matches) matches.forEach(m=>{ freq[m]=(freq[m]||0)+1; });
+  });
+  let best=null,bestN=0;
+  for(const k in freq) if(freq[k]>bestN){best=k;bestN=freq[k];}
+  return best || 'Unknown callsign';
+}
+
+// BeyondATC radio phraseology is consistent: ATC leads with the callsign
+// ("Delta 2201, turn left...") while a pilot readback (manual OR
+// auto-responded - both produce the same TTS line) signs off WITH the
+// callsign at the end ("Turn left..., Delta 2201."). The LocalVoiceInput
+// `sid` is a per-session voice-slot id, not a fixed "this is the pilot"
+// marker, so it can't reliably tell PILOT from ATC on its own - use it only
+// as a fallback when the callsign position is ambiguous (rare chatter with
+// no clearance content, e.g. an initial check-in).
+function escapeRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function refineSpeakersByCallsign(events, callsign){
+  if(!callsign || callsign==='Unknown callsign') return;
+  const esc = escapeRegex(callsign);
+  const startRe = new RegExp('^'+esc+'\\b', 'i');
+  const endRe = new RegExp('\\b'+esc+'[.,]?\\s*$', 'i');
+  events.forEach(e=>{
+    // A player self-report (playerActionTriggered - set in parseLegLines
+    // from either a [PlayerAction] tag or matching known self-report
+    // content, see RE_PLAYER_ACTION/RE_PILOT_SELF_REPORT) is definitively
+    // PILOT speech - don't let this heuristic override it. Most of these
+    // reports lead with the callsign exactly like real ATC phraseology
+    // does ("N452DA, ready for descent."), which is
+    // precisely the case startRe below would otherwise misclassify as ATC.
+    if(e.playerActionTriggered) return;
+    const t = e.text.trim();
+    if(startRe.test(t)) e.speaker = 'ATC';
+    else if(endRe.test(t)) e.speaker = 'PILOT';
+  });
+}
+
+function initApp(text){
+  const parsedResult = parseLog(text);
+  ALL_LEGS = parsedResult.legs;
+
+  document.getElementById('dropzone').style.display='none';
+  document.getElementById('app').style.display='block';
+
+  loadLeg(0);
+}
+
+// A file with more than one leg (see findLegBoundaries) is loaded and
+// evaluated one leg at a time - each leg gets its own callsign, meta, and
+// exchange list, since mixing two unrelated flights' states/events together
+// would misclassify everything and make the chart/exchange list meaningless.
+function loadLeg(idx){
+  currentLegIndex = idx;
+  PARSED = ALL_LEGS[idx];
+  const callsign = guessCallsign(PARSED.events, PARSED.meta.playerCallsigns);
+  refineSpeakersByCallsign(PARSED.events, callsign);
+  EXCHANGES = buildExchanges(PARSED);
+  CFG = JSON.parse(JSON.stringify(DEFAULT_CFG));
+
+  const profile = categoryProfileForType(PARSED.meta.actype);
+  if(profile){
+    const tag = `Cat ${profile.category} · ${PARSED.meta.actype}`;
+    CFG.approachSpeedLimit.v = profile.approach;
+    CFG.approachSpeedLimit.label = `Approach speed target (${tag})`;
+    CFG.landingSpeedLimit.v = profile.landing;
+    CFG.landingSpeedLimit.label = `Landing speed target (${tag})`;
+    CFG.altMinRate.v = profile.minClimbRate;
+    CFG.altMinRate.label = `Min. expected climb/descent rate (${tag})`;
+    CFG.vsWarn.v = profile.vsWarn;
+    CFG.vsWarn.label = `Vertical speed caution (${tag})`;
+    CFG.vsBad.v = profile.vsBad;
+    CFG.vsBad.label = `Vertical speed violation (${tag})`;
+  }
+  // The category tie-in only shows inside the Thresholds panel, which is
+  // collapsed by default - someone who never opens it (or doesn't know to
+  // look) would never learn their aircraft fell back to flat, untuned
+  // numbers. Surface that same fact somewhere always visible instead.
+  const catNote = document.getElementById('hCatNote');
+  if(profile){
+    catNote.style.display = 'none';
+    catNote.innerHTML = '';
+  } else {
+    catNote.style.display = 'block';
+    const what = PARSED.meta.actype
+      ? `Aircraft type "${PARSED.meta.actype}" isn't in the category table`
+      : `No aircraft type found in this log`;
+    catNote.innerHTML = `⚠ ${what} — using flat default thresholds, not tuned to this aircraft.<span class="link" id="hCatNoteLink">View category reference</span>`;
+    document.getElementById('hCatNoteLink').addEventListener('click', ()=>{
+      document.getElementById('configPanel').classList.add('open');
+      document.getElementById('categoryTable').scrollIntoView({behavior:'smooth', block:'center'});
+    });
+  }
+  PARSED.meta.fieldElevations = deriveFieldElevations(PARSED.states);
+  if(PARSED.meta.fieldElevations.arrival != null){
+    CFG.approachAltThreshold.label = `"On approach" altitude (AGL, field ~${Math.round(PARSED.meta.fieldElevations.arrival)}ft)`;
+  }
+  // A log doesn't have to cover gate-to-gate - BeyondATC recording can
+  // start after the aircraft is already airborne (mid-cruise) or stop
+  // before it lands. deriveFieldElevations already detects this (returns
+  // null for whichever end has no ground state) rather than guessing a
+  // wrong field elevation, but that fact was otherwise invisible in the
+  // UI - a log that opens already at FL390 looks like any other flight
+  // until you notice the chart has no taxi-out. Surface it plainly.
+  const flightNote = document.getElementById('hFlightNote');
+  const noDeparture = PARSED.meta.fieldElevations.departure == null;
+  const noArrival = PARSED.meta.fieldElevations.arrival == null;
+  if(!noDeparture && !noArrival){
+    flightNote.style.display = 'none';
+    flightNote.innerHTML = '';
+  } else {
+    flightNote.style.display = 'block';
+    // isOnGround (spd<5 && gs<5) is deliberately strict, so "no arrival
+    // state" includes a log that cuts off mid landing-rollout (already
+    // touched down, still decelerating) - "stopped before landing" would
+    // be wrong for that case, so phrase it as "before coming to a stop"
+    // instead, which is accurate whether the cutoff is mid-descent or
+    // mid-rollout.
+    const what = noDeparture && noArrival
+      ? "captures neither end of the flight - recording began after takeoff and stopped before the aircraft came to a stop"
+      : noDeparture
+        ? 'starts mid-flight - no departure/ground state was captured (recording began after takeoff)'
+        : 'ends before the aircraft came to a stop - no arrival/ground state was captured';
+    flightNote.innerHTML = `⚠ This log ${what}.`;
+  }
+  // Flight-wide header alert, not a per-exchange badge - there's no single
+  // ATC instruction to attach a forgotten squawk to, unlike HDG/ALT/SPD
+  // which always trace back to a specific clearance.
+  const xpdrNote = document.getElementById('hXpdrNote');
+  const xpdrAlert = deriveTransponderAlert(PARSED.states);
+  if(!xpdrAlert){
+    xpdrNote.style.display = 'none';
+    xpdrNote.innerHTML = '';
+  } else {
+    xpdrNote.style.display = 'block';
+    const what = xpdrAlert.turnedOnTime != null
+      ? `stayed Off from liftoff (~${fmtTime(xpdrAlert.liftoffTime)}) until ~${fmtTime(xpdrAlert.turnedOnTime)}`
+      : `stayed Off from liftoff (~${fmtTime(xpdrAlert.liftoffTime)}) and was never confirmed On for the rest of this log`;
+    xpdrNote.innerHTML = `⚠ Transponder ${what} — check for a missed squawk after takeoff.`;
+  }
+  PARSED.meta.topOfClimbLineIndex = deriveTopOfClimbLineIndex(PARSED.states, PARSED.meta.cruiseAlt);
+
+  document.getElementById('hCallsign').innerHTML = `<span class="dot">●</span> ${callsign}`;
+  const m = PARSED.meta;
+  const routeParts = [];
+  if(m.orig && m.dest) routeParts.push(`${m.orig} <b>${m.origrwy?('rwy '+m.origrwy+' '):''}</b>→ ${m.dest} <b>${m.destrwy?('rwy '+m.destrwy):''}</b>`);
+  if(m.actype) routeParts.push(`${m.actype}`);
+  if(m.cruiseAlt) routeParts.push(`FL${Math.round(m.cruiseAlt/100)}`);
+  document.getElementById('hRoute').innerHTML = routeParts.join(' &nbsp;·&nbsp; ') || 'Route info not found in log';
+
+  buildLegPicker();
+  buildConfigPanel();
+  buildCategoryTable();
+  recompute();
+  buildFilterBar();
+  drawChart();
+}
+
+function buildLegPicker(){
+  const bar = document.getElementById('legPicker');
+  if(ALL_LEGS.length <= 1){ bar.style.display='none'; bar.innerHTML=''; return; }
+  bar.style.display='flex';
+  bar.innerHTML = `<span class="leg-label">This file has ${ALL_LEGS.length} legs:</span>`;
+  ALL_LEGS.forEach((leg, i)=>{
+    const cs = guessCallsign(leg.events, leg.meta.playerCallsigns);
+    const route = (leg.meta.orig && leg.meta.dest) ? `${leg.meta.orig}→${leg.meta.dest}` : `leg ${i+1}`;
+    const p = document.createElement('button');
+    p.className = 'pill' + (i===currentLegIndex ? ' active' : '');
+    p.textContent = `${cs} · ${route}`;
+    p.onclick = ()=>{ loadLeg(i); };
+    bar.appendChild(p);
+  });
+}
+
+function buildConfigPanel(){
+  const grid = document.getElementById('cfgGrid');
+  grid.innerHTML='';
+  for(const key in CFG){
+    const c = CFG[key];
+    const div = document.createElement('div');
+    div.className='cfg-item';
+    div.innerHTML = `<label>${c.label}</label><div class="row"><input type="number" data-key="${key}" value="${c.v}"><span class="unit">${c.unit}</span></div>`;
+    grid.appendChild(div);
+  }
+  grid.querySelectorAll('input').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      CFG[inp.dataset.key].v = parseFloat(inp.value)||0;
+      recompute();
+      drawChart();
+    });
+  });
+}
+
+// Reference table for CATEGORY_PERFORMANCE - shows every category's values
+// side by side (not just the loaded aircraft's), with the matching row
+// highlighted, so it's visible at a glance whether/why this flight's
+// thresholds differ from another aircraft's without reading source code.
+function buildCategoryTable(){
+  const host = document.getElementById('categoryTable');
+  const actype = PARSED.meta.actype ? PARSED.meta.actype.toUpperCase() : null;
+  const currentCat = actype ? AIRCRAFT_APPROACH_CATEGORY[actype] : null;
+  const note = !actype
+    ? 'Aircraft type not found in this log - using flat defaults above.'
+    : currentCat
+      ? `Detected type: ${actype} → Category ${currentCat}.`
+      : `Detected type: ${actype} - not in the category table below, using flat defaults above.`;
+  const rows = ['A','B','C','D','E'].map(cat=>{
+    const p = CATEGORY_PERFORMANCE[cat];
+    const examples = (CATEGORY_EXAMPLES[cat]||[]).join(', ') || '(none in this table - defined for any future type that genuinely qualifies)';
+    return `<tr class="${cat===currentCat?'current':''}">
+      <td>${cat}</td>
+      <td class="examples">${examples}</td>
+      <td>${p.approach}kt</td>
+      <td>${Math.round(p.approach*0.9)}kt</td>
+      <td>${p.minClimbRate}fpm</td>
+      <td>${p.vsWarn}fpm</td>
+      <td>${p.vsBad}fpm</td>
+    </tr>`;
+  }).join('');
+  host.innerHTML = `
+    <div class="cat-note">${note}</div>
+    <div class="cat-table-wrap">
+      <table class="cat-table">
+        <thead><tr>
+          <th>Cat</th><th>Example types</th><th>Approach</th><th>Landing</th>
+          <th>Min climb/descent</th><th>VS caution</th><th>VS violation</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function statusCounts(){
+  let ok=0,warn=0,bad=0,none=0;
+  EXCHANGES.forEach(ex=>{
+    if(ex.eval.overall==='ok') ok++;
+    else if(ex.eval.overall==='warn') warn++;
+    else if(ex.eval.overall==='bad') bad++;
+    else none++;
+  });
+  return {ok,warn,bad,none, total:EXCHANGES.length};
+}
+
+function buildFilterBar(){
+  const bar = document.getElementById('filterBar');
+  const defs = [
+    {key:'all', label:'All'},
+    {key:'flagged', label:'Flagged only'},
+    {key:'HDG', label:'Heading'},
+    {key:'ALT', label:'Altitude'},
+    {key:'SPD', label:'Speed'},
+    {key:'V/S', label:'Vertical speed'},
+    {key:'RESP', label:'Response delay'},
+  ];
+  bar.innerHTML='';
+  defs.forEach(d=>{
+    const p = document.createElement('button');
+    p.className = 'pill'+(d.key===activeFilter?' active':'');
+    p.textContent = d.label;
+    p.onclick = ()=>{ activeFilter = d.key; buildFilterBar(); renderList(); };
+    bar.appendChild(p);
+  });
+  document.getElementById('searchBox').oninput = (e)=>{ searchTerm = e.target.value.toLowerCase(); renderList(); };
+}
+
+function matchesFilter(ex){
+  if(searchTerm && !ex.atc.text.toLowerCase().includes(searchTerm)) return false;
+  if(activeFilter==='all') return true;
+  if(activeFilter==='flagged') return ex.eval.overall==='warn' || ex.eval.overall==='bad';
+  return ex.eval.results.some(r=>r.type===activeFilter);
+}
+
+function statusIcon(status){
+  return status==='ok' ? '✓' : status==='warn' ? '⚠' : status==='bad' ? '✕' : '·';
+}
+
+// Mini compass for a missed heading: magenta dashed line for the assigned
+// course (matching real GPS/FMS moving-map convention for the selected
+// course), solid status-colored line for where the aircraft actually ended
+// up - a visual assigned-vs-actual comparison instead of two numbers to
+// mentally diff.
+function headingCompassSvg({target, actual, status}){
+  const color = status==='bad' ? 'var(--red)' : 'var(--amber)';
+  const cx=40, cy=40, r=30;
+  const pt = deg => {
+    const rad = (deg-90) * Math.PI/180;
+    return [(cx + r*Math.cos(rad)).toFixed(1), (cy + r*Math.sin(rad)).toFixed(1)];
+  };
+  const [tx,ty] = pt(target);
+  const [ax,ay] = pt(actual);
+  return `<div class="hdg-compass">
+    <svg width="80" height="80" viewBox="0 0 80 80">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+      <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dimmer)">N</text>
+      <line x1="${cx}" y1="${cy}" x2="${tx}" y2="${ty}" stroke="var(--magenta)" stroke-width="2" stroke-dasharray="3,2"/>
+      <line x1="${cx}" y1="${cy}" x2="${ax}" y2="${ay}" stroke="${color}" stroke-width="2.5"/>
+      <circle cx="${cx}" cy="${cy}" r="1.6" fill="var(--text)"/>
+    </svg>
+    <div class="hdg-compass-legend">
+      <span style="color:var(--magenta)">┄ assigned ${target}°</span>
+      <span style="color:${color}">━ actual ${actual}°</span>
+    </div>
+  </div>`;
+}
+
+function renderStrip(ex){
+  const overall = ex.eval.overall;
+  const cls = overall==='ok'?'status-ok':overall==='warn'?'status-warn':overall==='bad'?'status-bad':'';
+  const badges = ex.eval.results.map(r=>`<span class="badge ${r.status}">${statusIcon(r.status)} ${r.label}</span>`).join('');
+  const hdgResult = ex.eval.results.find(r=>r.type==='HDG' && r.diagram);
+  const t = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : '—';
+
+  const div = document.createElement('div');
+  div.className = 'strip '+cls;
+  div.innerHTML = `
+    <div class="strip-head">
+      <div class="strip-time">${t}</div>
+      <div class="strip-main">
+        <div class="strip-instr"><span class="who">${ex.atc.speaker==='PILOT' ? 'Pilot' : 'ATC'}</span>${escapeHtml(ex.atc.text)}</div>
+        ${badges ? `<div class="strip-badges">${badges}</div>` : ''}
+      </div>
+      <div class="strip-chevron">▶</div>
+    </div>
+    <div class="strip-detail">
+      ${ex.readback ? `<div class="readback"><span class="who">Pilot</span>${escapeHtml(ex.readback.text)}</div>` : (ex.isPilotReport ? '' :
+        // Red only when a readback was actually expected - matching the
+        // exact same ex.hasTarget condition the RESP check itself uses
+        // (evaluateExchange's `!ex.readback && ex.hasTarget` branch). This
+        // detail view previously showed red unconditionally whenever
+        // ex.readback was null, regardless of hasTarget - misleadingly
+        // flagging plain acknowledgments/frequency changes ("readback
+        // correct, contact ground...") in the same alarming color as a
+        // genuine missing-readback violation, even though no RESP badge
+        // ever appeared for them in the summary (hasTarget is false, so
+        // evaluateExchange never flags it at all).
+        (ex.hasTarget ? `<div class="readback" style="color:var(--red)">No readback captured</div>` : `<div class="readback" style="color:var(--text-dimmer)">No readback captured (none expected)</div>`))}
+      ${ex.atc.rawVoice ? `<div class="rawvoice">🔊 "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
+      ${hdgResult ? headingCompassSvg(hdgResult.diagram) : ''}
+      <div class="detail-grid">
+        <div class="detail-col">
+          <h4>Aircraft state at instruction</h4>
+          ${ex.atc.state ? renderStateKV(ex.atc.state) : '<div class="kv">No state captured</div>'}
+        </div>
+        <div class="detail-col">
+          <h4>State at end of response window</h4>
+          ${ex.windowStates.length ? renderStateKV(ex.windowStates[ex.windowStates.length-1]) : '<div class="kv">No further data</div>'}
+        </div>
+      </div>
+    </div>
+  `;
+  div.querySelector('.strip-head').addEventListener('click', ()=>{
+    div.classList.toggle('open');
+  });
+  return div;
+}
+
+function renderStateKV(s){
+  return `
+    <div class="kv"><span>Altitude</span><b>${Math.round(s.alt).toLocaleString()} ft</b></div>
+    <div class="kv"><span>Heading</span><b>${Math.round(s.hdg)}°</b></div>
+    <div class="kv"><span>Speed (IAS)</span><b>${Math.round(s.spd)} kt</b></div>
+    <div class="kv"><span>Ground speed</span><b>${Math.round(s.gs)} kt</b></div>
+    <div class="kv"><span>In vector</span><b>${s.inVector?'Yes':'No'}</b></div>
+    <div class="kv"><span>Fix</span><b>${s.currFix||'—'}</b></div>
+    <div class="kv"><span>Time</span><b>${fmtTime(s.timeMin)}</b></div>
+  `;
+}
+
+function escapeHtml(str){
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function renderList(){
+  const list = document.getElementById('stripList');
+  list.innerHTML='';
+  const filtered = EXCHANGES.filter(matchesFilter);
+  document.getElementById('emptyState').style.display = filtered.length ? 'none':'block';
+  document.getElementById('listTitle').textContent = `ATC Instructions (${filtered.length} of ${EXCHANGES.length})`;
+  filtered.forEach(ex=> list.appendChild(renderStrip(ex)));
+}
+
+function render(){
+  const counts = statusCounts();
+  const stats = document.getElementById('hStats');
+  stats.innerHTML = `
+    <div class="stat"><div class="n">${counts.total}</div><div class="l">Instructions</div></div>
+    <div class="stat ok"><div class="n">${counts.ok}</div><div class="l">Compliant</div></div>
+    <div class="stat warn"><div class="n">${counts.warn}</div><div class="l">Warnings</div></div>
+    <div class="stat bad"><div class="n">${counts.bad}</div><div class="l">Violations</div></div>
+  `;
+  renderList();
+}
+
+/* ============================================================
+   CHART
+   ============================================================ */
+
+function drawChart(){
+  const host = document.getElementById('chartHost');
+  const states = PARSED.states;
+  if(!states.length){ host.innerHTML='<p style="color:var(--text-dimmer)">No PlayerState data found.</p>'; return; }
+
+  const W = Math.max(900, states.length*3.2), H = 260, padL=54, padR=54, padT=10, padB=24;
+  const maxAlt = Math.max(...states.map(s=>s.alt), 1000)*1.08;
+  const maxSpd = Math.max(...states.map(s=>s.spd), 100)*1.15;
+  const n = states.length;
+  const x = i => padL + (W-padL-padR) * (i/(n-1||1));
+  const yAlt = a => padT + (H-padT-padB) * (1 - a/maxAlt);
+  const ySpd = sp => padT + (H-padT-padB) * (1 - sp/maxSpd);
+
+  let altPath = states.map((s,i)=> (i===0?'M':'L')+x(i).toFixed(1)+','+yAlt(s.alt).toFixed(1)).join(' ');
+  let spdPath = states.map((s,i)=> (i===0?'M':'L')+x(i).toFixed(1)+','+ySpd(s.spd).toFixed(1)).join(' ');
+
+  // markers for ATC instructions -> find nearest state index by lineIndex
+  const markers = EXCHANGES.map(ex=>{
+    if(!ex.atc.state) return null;
+    let bestI=0,bestD=Infinity;
+    states.forEach((s,i)=>{ const d=Math.abs(s.lineIndex-ex.atc.lineIndex); if(d<bestD){bestD=d;bestI=i;} });
+    const color = ex.eval.overall==='bad' ? 'var(--red)' : ex.eval.overall==='warn' ? 'var(--amber)' : ex.eval.overall==='ok' ? 'var(--green)' : 'var(--gray)';
+    return {x:x(bestI), ex, color};
+  }).filter(Boolean);
+
+  let markerEls = markers.map(m=>`<line x1="${m.x.toFixed(1)}" y1="${padT}" x2="${m.x.toFixed(1)}" y2="${H-padB}" stroke="${m.color}" stroke-width="1.5" opacity="0.55" class="marker" data-ex="${m.ex.id}" style="cursor:pointer"></line>`).join('');
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="min-width:100%">
+    <line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="var(--line)"/>
+    <text x="${padL-8}" y="${padT+8}" fill="var(--purple)" font-size="10" text-anchor="end">${Math.round(maxAlt).toLocaleString()}ft</text>
+    <text x="${padL-8}" y="${H-padB}" fill="var(--purple)" font-size="10" text-anchor="end">0</text>
+    <text x="${W-padR+8}" y="${padT+8}" fill="var(--blue)" font-size="10">${Math.round(maxSpd)}kt</text>
+    <text x="${W-padR+8}" y="${H-padB}" fill="var(--blue)" font-size="10">0</text>
+    ${markerEls}
+    <path d="${altPath}" fill="none" stroke="var(--purple)" stroke-width="1.8"/>
+    <path d="${spdPath}" fill="none" stroke="var(--blue)" stroke-width="1.4" opacity="0.85"/>
+  </svg>`;
+
+  host.querySelectorAll('.marker').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const exId = parseInt(el.dataset.ex);
+      activeFilter='all'; searchTerm=''; document.getElementById('searchBox').value='';
+      buildFilterBar(); renderList();
+      requestAnimationFrame(()=>{
+        const strips = document.querySelectorAll('.strip');
+        const target = strips[exId];
+        if(target){ target.scrollIntoView({behavior:'smooth', block:'center'}); target.classList.add('open'); }
+      });
+    });
+  });
+}
+
+/* ============================================================
+   WIRING
+   ============================================================ */
+
+document.getElementById('btnConfig').addEventListener('click', ()=>{
+  document.getElementById('configPanel').classList.toggle('open');
+});
+document.getElementById('btnReload').addEventListener('click', ()=>{
+  document.getElementById('app').style.display='none';
+  document.getElementById('dropzone').style.display='flex';
+  document.getElementById('fileInput').value='';
+});
+
+const dropbox = document.getElementById('dropbox');
+const fileInput = document.getElementById('fileInput');
+dropbox.addEventListener('click', (e)=>{ /* label triggers input natively */ });
+fileInput.addEventListener('change', ()=>{
+  if(fileInput.files[0]) handleFile(fileInput.files[0]);
+});
+['dragenter','dragover'].forEach(ev=>{
+  dropbox.addEventListener(ev, e=>{ e.preventDefault(); dropbox.classList.add('drag'); });
+});
+['dragleave','drop'].forEach(ev=>{
+  dropbox.addEventListener(ev, e=>{ e.preventDefault(); dropbox.classList.remove('drag'); });
+});
+dropbox.addEventListener('drop', e=>{
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if(f) handleFile(f);
+});
+
+function handleFile(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      document.getElementById('parseError').textContent='';
+      initApp(reader.result);
+    }catch(err){
+      document.getElementById('parseError').textContent = 'Could not parse this file: '+err.message;
+      console.error(err);
+    }
+  };
+  reader.onerror = () => {
+    document.getElementById('parseError').textContent = 'Could not read this file.';
+  };
+  reader.readAsText(file);
+}
+</script>
+</body>
+</html>
