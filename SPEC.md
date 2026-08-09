@@ -87,7 +87,7 @@ Everything runs client-side in a single `.html` file — no build step, no serve
 
 ### Known parsing/behavioral edge cases worth knowing about
 
-- **Speaker detection** relies on BeyondATC's consistent radio phraseology (ATC leads with the callsign; a pilot readback signs off *with* the callsign at the end), not the log's internal `sid` voice-slot id, which is not a reliable ATC/pilot marker.
+- **Speaker detection** relies on BeyondATC's consistent radio phraseology (ATC leads with the callsign; a pilot readback signs off *with* the callsign at the end), not the log's internal `sid` voice-slot id, which is not a reliable ATC/pilot marker. Player-initiated requests ("request IFR clearance," "request direct to fix," "ready for descent," etc.) break this pattern by leading with the callsign like ATC does - these are recognized separately by content, so they're correctly attributed to the pilot rather than misread as an ATC transmission.
 - **Callsign detection** prefers the log's own `Player Callsign:` line whenever it appears literally in the transcript (required for tail-number-style callsigns like `N452DA`), falling back to frequency-guessing a spoken "Word ####" pattern only when no hint matches.
 - **Multi-leg logs**: a single file can contain more than one flight back-to-back if BeyondATC wasn't restarted between them. The tool detects and separates these automatically.
 - **"Climb/descend via [procedure]"** clearances are recognized but not independently verified against the named SID/STAR's own altitude constraints (that data isn't in the log) — reported as "not independently verified from available states" rather than guessed at.
