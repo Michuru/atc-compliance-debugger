@@ -286,6 +286,24 @@ const RE_INSTR = /\[Instruction\]\s(.*)/;
 const RE_CRUISE = /Initial Cruise Altitude:\s*(\d+)/;
 const RE_SIMBRIEF = /SimBrief flight plan URL:\s*(\S+)/;
 const RE_PLAYER_CALLSIGN = /Player Callsign:\s*(\S+)/;
+// BeyondATC writes this line unconditionally in every log's flight-info
+// block, regardless of whether the flight plan came from SimBrief or was
+// loaded directly from MSFS - unlike meta.actype below (historically only
+// ever read from the SimBrief URL's `type=` param), so a non-SimBrief
+// flight had NO aircraft-type source at all and silently fell back to
+// flat DEFAULT_CFG thresholds with a "no aircraft type found" header
+// warning, even though the type was sitting right there in the log the
+// whole time. Found 2026-08-09 while cross-checking a queued VFR Use Case
+// log (`Player - KGUR inbound shows request departure.log`, an
+// MSFS-loaded KCYS-KCYS flight plan, user's own note confirms "doesn't
+// happen with SimBrief-loaded plans") - confirmed via direct grep that
+// `Aircraft Type: BE36` is present in the raw log, yet the tool reported
+// no type found. Confirmed this line and the SimBrief URL's `type=` param
+// agree when both are present (`Player - another aircraft not recog.log`:
+// both say B722) and that this line consistently appears in the same
+// flight-info block regardless of SimBrief use, so it's read as the
+// primary source now.
+const RE_AIRCRAFT_TYPE = /Aircraft Type:\s*(\S+)/;
 // Real (push-to-talk) pilot speech goes through a separate speech-to-text
 // pipeline instead of the [LocalVoiceInput]/[Instruction] pair used for
 // synthesized ATC voice and text-based readbacks. The "AI Processed" line
@@ -354,6 +372,43 @@ const RE_ATC_SELF_REPORT_PROMPT = /\breport\s+ready for (descent|departure)\b/i;
 // "report ready for descent" genuinely is real ATC phraseology for the
 // same event).
 const RE_PILOT_REQUEST = /\brequest(?:ing|ed)?\b/i;
+// Real ATC counterexamples to the "zero ATC instances of 'request'" audit
+// above - found 2026-08-11 via `Player - cleared into Class Delta but no
+// landing option.log`, which surfaced two: the tower's own grant phrasing
+// ("N738FE, proceed through the Class Delta AS REQUESTED, maintain VFR.")
+// referencing the pilot's earlier request instead of making one, and
+// BeyondATC's canned non-response to an unparsed landing request
+// ("...landing clearance not issued. Please MAKE A taxi REQUEST and check
+// the frequency..."), where "request" is a noun object, not the pilot's own
+// verb. A third, pre-existing instance was already lurking undetected in
+// two other sample logs (`Player - Class Delta entered without tower
+// contact.log`, `Player - Denver Bravo crossing and automatic PIREP.log`):
+// "N738FE, Boston Center, good evening, SAY REQUEST." - ATC prompting the
+// pilot to state a request, not stating one itself. All three misled
+// `isPlayerReport` below into tagging genuine ATC speech as PILOT, which
+// `refineSpeakersByCallsign` can never correct afterward (it deliberately
+// skips any event with playerActionTriggered already set - see its own
+// comment). Re-audited the full Player Log Samples/ library for every
+// [Instruction] line containing "request" before adding this exclusion:
+// these three phrasings never appear in genuine pilot speech anywhere in
+// the library, only in these ATC lines.
+const RE_ATC_REQUEST_ECHO = /\bsay request\b|\bas requested\b|\bmake a\s+\S+\s+request\b/i;
+// Same misclassification once more, for a go-around: the player's own
+// report ("Gray Bird 343, going around.") leads with the callsign just
+// like the cases above, breaking the same callsign-position heuristic.
+// Unlike "request X" (always player-initiated), a go-around genuinely CAN
+// be ATC-directed too (a real controller command, not just a pilot
+// decision), so a bare content match on "go around" would be unsafe.
+// Narrowed to the present-continuous form only ("going around" - the
+// player reporting what they themselves are doing right now), which is
+// how this tool's synthesized pilot self-reports consistently phrase
+// things elsewhere ("ready for descent"), as distinct from an imperative
+// ATC command ("go around"). Unlike RE_PILOT_REQUEST, this is NOT audited
+// against many real logs - a grep of the whole sample library found only
+// one go-around instance anywhere (`Player log - loaded after fatal error
+// and a go around.log`), so there's no real ATC-directed example on hand
+// to verify this distinction against. Revisit if a counterexample turns up.
+const RE_PILOT_GOAROUND = /\bgoing around\b/i;
 
 // A single Player.log can contain multiple legs back-to-back if the sim
 // session was reused without restarting BeyondATC (each leg gets its own
@@ -391,6 +446,7 @@ function parseLegLines(lines, startIdx, endIdx){
     let m;
     if((m = line.match(RE_CRUISE))){ meta.cruiseAlt = parseInt(m[1]); continue; }
     if((m = line.match(RE_PLAYER_CALLSIGN))){ meta.playerCallsigns.push(m[1]); continue; }
+    if((m = line.match(RE_AIRCRAFT_TYPE))){ meta.actype = m[1]; continue; }
     if((m = line.match(RE_SIMBRIEF))){
       try{
         const u = new URL(m[1]);
@@ -470,7 +526,8 @@ function parseLegLines(lines, startIdx, endIdx){
       if(playerActionFresh) lastPlayerActionLine = -999;
       const isPlayerReport = playerActionFresh
         || (RE_PILOT_SELF_REPORT.test(text) && !RE_ATC_SELF_REPORT_PROMPT.test(text))
-        || RE_PILOT_REQUEST.test(text);
+        || (RE_PILOT_REQUEST.test(text) && !RE_ATC_REQUEST_ECHO.test(text))
+        || RE_PILOT_GOAROUND.test(text);
       const speaker = isPlayerReport ? 'PILOT'
         : lastLVI && (i - lastLVILine < 20) ? (lastLVI.sid === '409' ? 'PILOT' : 'ATC')
         : 'UNKNOWN';
@@ -554,6 +611,26 @@ function parseAltitudeClearance(text){
   // otherwise dead-end the digit-only branch on the letter "F".
   m = text.match(/cross\s+[\w-]+\s+at\s+(?:or\s+(?:above|below)\s+)?(?:FL\s*(\d{3})|([\d,]+)\s*(?:feet)?)/i);
   if(m) return { action:'maintain', targetFt: m[1] ? parseInt(m[1])*100 : parseInt(m[2].replace(/,/g,'')), raw:m[0], pointRestriction:true };
+  // "Maintain VFR at or below/above (altitude)" is a Class B/C transition
+  // altitude ceiling/floor, not a target to converge on - BeyondATC's
+  // paraphrase of FAA JO 7110.65BB Para 7-9-2 (VFR AIRCRAFT IN CLASS B
+  // AIRSPACE), whose actual phraseology is "CLEARED THROUGH/TO ENTER/OUT
+  // OF BRAVO AIRSPACE ... MAINTAIN (altitude) WHILE IN BRAVO AIRSPACE" -
+  // same paraphrase pattern as "leave FIX heading" standing in for the
+  // FAA's "DEPART (fix) HEADING." Previously fell all the way through to
+  // `null` (confirmed against a real log: `Player - KFRG NY Bravo
+  // clearance altitude question.log`'s "cleared through the New York
+  // Bravo airspace, maintain VFR at or below 2500" got zero compliance
+  // evaluation at all), which is exactly backwards for a Class B
+  // altitude restriction - the whole reason a pilot would ask "was I
+  // compliant here" is the one case this silently had no opinion on.
+  // Returns `vfrCeiling`/`direction` instead of a plain target: unlike a
+  // "climb/descend/maintain X" clearance, ANY altitude on the correct
+  // side of the number is compliant, so evaluateExchange's ALT section
+  // handles this with a dedicated ceiling/floor check instead of the
+  // compliedAt/bust machinery built for a specific target altitude.
+  m = text.match(/maintain\s+VFR\s+at\s+or\s+(below|above)\s+([\d,]+)/i);
+  if(m) return { action:'maintain', targetFt: parseInt(m[2].replace(/,/g,'')), raw:m[0], vfrCeiling:true, direction:m[1].toLowerCase() };
   m = text.match(/\bmaintain\s+([\d,]{3,})\s*(?:feet)?\b/i);
   if(m) return { action:'maintain', targetFt: parseInt(m[1].replace(/,/g,'')), raw:m[0], untilEstablished };
   // "Climb via [SID]" / "descend via [STAR]" complies with the *procedure's
@@ -1039,7 +1116,7 @@ function evaluateExchange(ex, cfg){
         // readback - carried over separately (see the recompute() pass
         // below) and surfaced on the superseding exchange instead, same
         // pattern as the ALT carryover above.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward target, new instructions before reaching heading ${target}°`, carryover:{targetHdg:target}});
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward it, new instructions given before arriving`, carryover:{targetHdg:target}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -1092,8 +1169,35 @@ function evaluateExchange(ex, cfg){
 
   // ---- ALTITUDE ----
   if(ex.clearance.altitude){
-    const { action, targetFt, atDiscretion, pointRestriction, viaProcedure, untilEstablished } = ex.clearance.altitude;
-    if(viaProcedure){
+    const { action, targetFt, atDiscretion, pointRestriction, viaProcedure, untilEstablished, vfrCeiling, direction } = ex.clearance.altitude;
+    if(vfrCeiling){
+      // See parseAltitudeClearance - any altitude on the correct side of
+      // targetFt is fully compliant for the whole time this clearance is
+      // in effect, so this doesn't use the compliedAt/bust logic below
+      // (which is built around converging on a specific target). Scans
+      // the whole altWin for the worst excursion past the ceiling/floor,
+      // small tolerance buffer for altimeter/rounding noise same as the
+      // rest of this file.
+      let worst = null;
+      for(const s of altWin){
+        const over = direction==='below' ? s.alt - targetFt : targetFt - s.alt;
+        const worstOver = worst ? (direction==='below' ? worst.alt - targetFt : targetFt - worst.alt) : -Infinity;
+        if(over > cfg.altTol && over > worstOver) worst = s;
+      }
+      if(worst){
+        const diff = Math.round(Math.abs(worst.alt - targetFt));
+        const label = direction==='below'
+          ? `VFR ceiling ≤${targetFt.toLocaleString()}ft — exceeded, reached ${Math.round(worst.alt).toLocaleString()}ft (+${diff}ft over)`
+          : `VFR floor ≥${targetFt.toLocaleString()}ft — went below, reached ${Math.round(worst.alt).toLocaleString()}ft (-${diff}ft under)`;
+        results.push({type:'ALT', status: diff <= cfg.altTol*2 ? 'warn' : 'bad', label});
+      } else if(altWin.length){
+        const extreme = direction==='below' ? Math.max(...altWin.map(s=>s.alt)) : Math.min(...altWin.map(s=>s.alt));
+        const label = direction==='below'
+          ? `VFR ceiling ≤${targetFt.toLocaleString()}ft — stayed compliant, max altitude reached ${Math.round(extreme).toLocaleString()}ft`
+          : `VFR floor ≥${targetFt.toLocaleString()}ft — stayed compliant, min altitude reached ${Math.round(extreme).toLocaleString()}ft`;
+        results.push({type:'ALT', status:'ok', label});
+      }
+    } else if(viaProcedure){
       // "Climb via SID" / "descend via STAR" (see parseAltitudeClearance) -
       // no single targetFt exists to check compliance against, since the
       // procedure's own charted restrictions aren't data this tool has.
@@ -1148,6 +1252,35 @@ function evaluateExchange(ex, cfg){
     // the climb - a real, later violation the old bust-priority logic was
     // completely masking, not a false positive to be softened away.
     if(bust && compliedAt) bust = false;
+    // A "bust" past the assigned target that gets superseded by a FURTHER
+    // clearance in the same direction isn't a violation of the original
+    // target - the aircraft was already correctly headed toward what
+    // turned out to be an even lower/higher number ATC issued right as
+    // (or just after) it passed the original one. Same reasoning as the
+    // `ex.altSuperseded && progressing` carryover case below, just
+    // extended to cover an overshoot beyond the bust threshold instead of
+    // one still short of it - without this, a clearance superseded by
+    // further descent/climb can never reach that softer branch, since
+    // `bust` short-circuits before the compliedAt/finalState chain below
+    // is ever reached. Found against a real log: Qantas 515 Heavy's
+    // "descend to FL160" was immediately superseded by "descend FL120"
+    // (12,000ft, further down) with no sample ever landing near FL160 in
+    // between - a real instruction-coupled sampling gap, 17,461ft then
+    // straight to 14,637ft - so the aircraft was still correctly headed
+    // toward the new, lower target when the old unconditional bust check
+    // flagged it "overshot / busted altitude" regardless of what came
+    // next. Guarded on the superseding clearance's own target actually
+    // being further in the same direction (not just any supersession) so
+    // a genuine bust followed by ATC correcting the aircraft back the
+    // other way still reports bad, same as before.
+    if(bust && ex.altSuperseded && ex.altSupersededByIdx!=null){
+      const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.altSupersededByIdx);
+      const nextTarget = supersedingEx && supersedingEx.clearance && supersedingEx.clearance.altitude && supersedingEx.clearance.altitude.targetFt;
+      if(nextTarget!=null && (
+        (action==='descend' && nextTarget <= finalState.alt) ||
+        (action==='climb' && nextTarget >= finalState.alt)
+      )) bust = false;
+    }
     // A climb clearance like "climb via SID except maintain X" is often
     // delivered at the gate, long before pushback/taxi/takeoff. Measuring
     // delay or "progress" from that parked moment would make a routine
@@ -1263,9 +1396,14 @@ function evaluateExchange(ex, cfg){
         // superseded by the landing clearance; the old code still labeled
         // it "still climbing toward target" since 'maintain' isn't
         // 'descend'.
-        const progressVerb = action==='descend' ? 'still descending toward target' : action==='climb' ? 'still climbing toward target' : 'still approaching target';
+        // Direction reads off the actual telemetry (progressStart vs.
+        // finalState), not the ATC-assigned verb - a bare "maintain X" names
+        // neither climb nor descend, but the aircraft's real trajectory
+        // always has one, so this is accurate for all three action types
+        // and no longer needs a direction-neutral fallback for 'maintain'.
+        const progressVerb = finalState.alt > progressStart.alt ? 'still ascending' : 'still descending';
         const progress = isOnGround(startState) ? 'parked when issued' : progressVerb;
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, new instructions before reaching altitude ${targetFt.toLocaleString()}`, carryover:{targetFt}});
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, new instructions given before arriving`, carryover:{targetFt}});
       } else {
         let label;
         if(action==='descend' && diff > cfg.altTol){
@@ -1293,8 +1431,37 @@ function evaluateExchange(ex, cfg){
         const altSpreadWin = altWin.filter(s => s.lineIndex >= progressStart.lineIndex);
         const flatRange = altSpreadWin.length ? Math.max(...altSpreadWin.map(s=>s.alt)) - Math.min(...altSpreadWin.map(s=>s.alt)) : 0;
         const sustainedNonProgress = !altLiftoffPending && altSpreadWin.length >= 2 && flatRange <= cfg.altTol;
-        const status = ex.altSuperseded ? (sustainedNonProgress ? 'bad' : 'warn') : 'bad';
-        results.push({type:'ALT', status, label});
+        // A never-superseded clearance falls straight to a hard 'bad' below
+        // by default - correct when there was plenty of time to comply and
+        // it never happened, but wrong when the window (and the log/leg
+        // itself) ends before the aircraft could plausibly have finished
+        // the maneuver yet, e.g. a BeyondATC crash cutting the recording
+        // off moments after the call. Reuses the exact same base-allowance-
+        // plus-scaling expected-time formula the compliedAt branch above
+        // already uses (cfg.responseDelayMax + altChange/cfg.altMinRate),
+        // so the bar for "had a fair chance" is identical either way -
+        // not a new, separately-tuned threshold. Found against a real log:
+        // `Player log - fatal error.log`'s "descend and maintain FL180" was
+        // issued at t=375, and the only two available samples afterward are
+        // ALSO both at t=375 (the log ends there, mid-crash) - zero real
+        // elapsed time, yet the old logic unconditionally flagged "stayed
+        // high, ended 36,008ft (+18008ft)" bad regardless of how little
+        // time had actually passed. Deliberately keyed on elapsed time, not
+        // on "is this literally the log's last state" - a clearance can run
+        // out of useful data mid-log too (no more instructions, but plenty
+        // of irrelevant later samples), and a genuine sustained violation
+        // (elapsed time already exceeds expectedMax with zero progress)
+        // must still report bad regardless of what comes after it.
+        const altChangeAvail = Math.abs(targetFt - progressStart.alt);
+        const expectedMaxAvail = cfg.responseDelayMax + altChangeAvail/cfg.altMinRate;
+        const elapsedAvail = finalState.timeMin - progressStart.timeMin;
+        const notEnoughTime = !ex.altSuperseded && elapsedAvail < expectedMaxAvail;
+        if(notEnoughTime){
+          results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — instruction given shortly before the recording ended, not enough data to judge compliance`});
+        } else {
+          const status = ex.altSuperseded ? (sustainedNonProgress ? 'bad' : 'warn') : 'bad';
+          results.push({type:'ALT', status, label});
+        }
       }
     }
     }
@@ -1484,8 +1651,12 @@ function evaluateExchange(ex, cfg){
         (action==='maintain' && Math.abs(finalSpd.spd - targetKt) < Math.abs(startState.spd - targetKt) - cfg.spdTol)
       );
       if(ex.spdSuperseded && progressing){
-        const progressVerb = action==='reduce' ? 'still slowing toward target' : action==='increase' ? 'still speeding up toward target' : 'still adjusting toward target';
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetKt}kt — ${progressVerb}, new instructions before reaching speed ${targetKt}kt`, carryover:{targetKt}});
+        // Same telemetry-based direction as the ALT carryover branch above -
+        // reads off startState.spd vs. finalSpd.spd instead of the
+        // ATC-assigned verb, so 'maintain X knots' no longer needs a
+        // direction-neutral fallback either.
+        const progressVerb = finalSpd.spd > startState.spd ? 'still speeding up' : 'still slowing';
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetKt}kt — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetKt}kt — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
@@ -1551,7 +1722,27 @@ function evaluatePilotReport(ex, cfg){
    ============================================================ */
 
 const DEFAULT_CFG = {
+  // hdgTol checked against a full skim of FAA JO 7110.65BB (2026-08-11,
+  // prompted by the "leave FIX heading" citation already found elsewhere in
+  // this file) - confirmed no matching citation exists. The document's only
+  // heading-angle standards are aircraft-to-aircraft separation divergence
+  // angles (15°/45° courses diverging for wake/traffic separation), a
+  // different concept entirely from "how close to an assigned heading counts
+  // as compliant." Stays a judgment call, same as before, now confirmed
+  // rather than merely unexamined.
   hdgTol: {v:5, label:'Heading tolerance', unit:'°'},
+  // altTol itself has no citation either (same "checked, found nothing"
+  // status as hdgTol above) - but the *derived* 2xaltTol=300ft threshold the
+  // ALT bust check escalates on (see evaluateExchange's ALT section) turns
+  // out to already match a real FAA number, found in the same skim: JO
+  // 7110.65's Pilot/Controller Glossary entry for ADDITIONAL SERVICES states
+  // a controller should advise a pilot of "altitude deviation information of
+  // 300 feet or more from an assigned altitude as observed on a verified...
+  // automatic altitude readout (Mode C)." Likely coincidence rather than by
+  // design (altTol was never set with this number in mind), but the
+  // resulting escalation threshold lines up with a real published figure
+  // regardless - worth knowing before changing altTol's value, since doing
+  // so would also move this alignment.
   altTol: {v:150, label:'Altitude tolerance', unit:'ft'},
   // Assigned-speed tolerance/response-scaling for the SPD compliance check
   // in evaluateExchange (mirrors ALT/HDG's compliedAt+drift pattern) - see
@@ -1577,10 +1768,29 @@ const DEFAULT_CFG = {
   // helicopter," not a per-category performance question (see
   // evaluateExchange's V/S section).
   approachVsLimit: {v:1000, label:'Stabilized-approach sink rate limit', unit:'fpm'},
+  // Now directly cited (2026-08-11 JO 7110.65 skim, same pass as hdgTol/
+  // altTol above): FAA JO 7110.65BB Para 5-7-2 (SPEED ADJUSTMENT), NOTE 1 -
+  // "A pilot operating at or above 10,000 feet MSL on an assigned speed
+  // adjustment greater than 250 knots is expected to comply with 14 CFR
+  // section 91.117(a) when cleared below 10,000 feet MSL... without
+  // notifying ATC." The same paragraph's phraseology examples ("Reduce
+  // speed to two five zero," "Increase speed to Mach point seven two,"
+  // "Maintain two eight zero knots") match parseSpeedClearance's real-log-
+  // derived regex verbatim - independent confirmation the parser is
+  // matching genuine controller phraseology, not just this tool's own
+  // sample library's dialect of it. NOTE 2 of the same paragraph also
+  // documents a real, currently-UNIMPLEMENTED rule this tool doesn't check
+  // at all: 200kt (not 250kt) under a Class B shelf or in a VFR corridor
+  // through Class B airspace, per 14 CFR 91.117(c) - see the `BACKLOG.md`
+  // entry logging this as a known gap.
   speedBelow10k: {v:250, label:'Speed limit below 10,000ft', unit:'kt'},
   approachAltThreshold: {v:1000, label:'"On approach" altitude', unit:'ft AGL~'},
   approachSpeedLimit: {v:180, label:'Approach speed target', unit:'kt'},
   landingSpeedLimit: {v:160, label:'Landing-clearance speed target', unit:'kt'},
+  // Checked in the same 2026-08-11 JO 7110.65 skim - no matching citation
+  // exists. The document specifies controller phraseology/procedure, not a
+  // pilot compliance-timing standard, so this stays a judgment call (same
+  // status as hdgTol above, now confirmed rather than unexamined).
   responseDelayMax: {v:3, label:'Slow response threshold', unit:'min'},
   altMinRate: {v:500, label:'Min. expected climb/descent rate', unit:'fpm'}
 };
@@ -1589,8 +1799,9 @@ const DEFAULT_CFG = {
 // 1.3x stall speed at max landing weight): A <91kt, B 91-121kt, C 121-141kt,
 // D 141-166kt, E >=166kt. A flat approach/landing speed default is wrong
 // across a fleet spanning a DA62 to a 777, so derive a per-flight number
-// from the aircraft's actual ICAO type (SimBrief already gives us this in
-// meta.actype) instead. Broadened one-time from an initial ~40 types (just
+// from the aircraft's actual ICAO type (meta.actype - read from the log's
+// own `Aircraft Type:` line, with a SimBrief URL's `type=` param as a
+// secondary source when present; see RE_AIRCRAFT_TYPE) instead. Broadened one-time from an initial ~40 types (just
 // what appeared in real sample logs) to ~100 covering common MSFS
 // default/payware GA, turboprop, business jet, and airliner types - still
 // nowhere near the full ICAO Doc 8643 registry (thousands of types,
@@ -1620,6 +1831,29 @@ const AIRCRAFT_APPROACH_CATEGORY = {
   // the 91kt Category A/B threshold (1.3x Vso lands at ~79kt and ~75kt
   // respectively).
   C208:'A', PA24:'A',
+  // AC11 (Commander 114) added 2026-08-09 while cross-checking a queued VFR
+  // Use Case log (`Player - KFRG NY Bravo clearance altitude question.log`,
+  // N1107L) - surfaced only after fixing the meta.actype bug above, since
+  // this log has no SimBrief plan. Real POH data (ABS-affiliated Rockwell
+  // Commander 114 Standardization Manual): rotate 69 KIAS, normal-landing
+  // final approach 80 KIAS, minimum approach speed (gear/flaps down) 71
+  // KIAS - comfortably under the 91kt Category A/B boundary, same tier as
+  // the Bonanza/Comanche already above. Note: ATC's own PIREP-style
+  // callout for this aircraft says "Aero Commander 100," a different,
+  // older aircraft with its own distinct doc8643 code (VO10) - treated as
+  // BeyondATC's generic/imprecise verbal description, not the literal
+  // type, since the log's own `Aircraft Type: AC11` field and two
+  // independent sources (doc8643's own title, a Sprinkle listing) both
+  // identify AC11 specifically as the Commander 114.
+  AC11:'A',
+  // DHC6 (de Havilland Canada Twin Otter) and DHC2 (Beaver) added
+  // 2026-08-09 - both real default/marketplace MSFS aircraft (bush-flying
+  // staples, plausible for this user's own Colorado/mountain-airport
+  // flying pattern), missing from the table entirely before this pass.
+  // DHC-6: POH landing Vref 74-80 KIAS (flaps 37.5°/20° respectively) at
+  // max weights - comfortably Category A. DHC-2: Vso ~39kt (45mph, flaps
+  // extended) - even more comfortably Category A.
+  DHC6:'A', DHC2:'A',
   // B - turboprops & light/midsize business jets (91-121kt)
   P180:'B', TBM7:'B', TBM8:'B', TBM9:'B', PC12:'B', PC24:'B',
   C525:'B', C56X:'B', C550:'B', C650:'B', C680:'B', C700:'B',
@@ -1645,6 +1879,30 @@ const AIRCRAFT_APPROACH_CATEGORY = {
   // is consistent with Category B rather than a strong independent
   // confirmation - flag this one for a better source if it ever matters.
   BE60:'B', B60T:'B', C750:'B', STAR:'B',
+  // B58T (Beechcraft Baron 58P/58TC, Pressurized/Turbocharged) added
+  // 2026-08-09 alongside AC11 above, same discovery path (a queued VFR UC
+  // log with no SimBrief plan - `Player - Denver Bravo crossing and
+  // automatic PIREP.log`, N7733K, self-described in its own PIREP as
+  // "Beechcraft Baron 58 Turbo"). Deliberately NOT grouped with BE58
+  // (Category A) despite sharing the same base airframe - real
+  // type-specific data (ABS/BPPP "Guide to Initial Pilot Checkout:
+  // Pressurized and Turbocharged Barons") gives a 120 KIAS approach-
+  // configuration speed throughout the descent/approach profile (level
+  // approach, precision/nonprecision descent, MDA level, all 120 KIAS) -
+  // squarely inside the 91-121kt Category B band, not A. Same reasoning
+  // as BE60/B60T just above: the heavier, turbocharged/pressurized variant
+  // of a piston twin doesn't automatically inherit its lighter sibling's
+  // category.
+  B58T:'B',
+  // ATR72, DH8D (Dash 8 Q400), and DC6 (Douglas DC-6, an MSFS 2024 base-
+  // game aircraft) added 2026-08-09, same "popular MSFS planes" pass as
+  // DHC6/DHC2 above - regional turboprops/classic airliners with real
+  // published Vref: ATR 72-600 113kt; Dash 8 Q400 116-122kt depending on
+  // flap setting; DC-6A/B 108kt (same Boeing "FAA Reference Code and
+  // Approach Speeds for Boeing Aircraft" doc already cited elsewhere in
+  // this table - Boeing published Douglas DC speeds too, not just its own
+  // types). All three land inside the 91-121kt Category B band.
+  ATR72:'B', DH8D:'B', DC6:'B',
   // C - narrowbody jets (121-141kt)
   // 737 Classic/Original series (731/732/733/734/735/736) added alongside
   // the B733 fix below - same audit reasoning: if one 737 variant was
@@ -1656,8 +1914,44 @@ const AIRCRAFT_APPROACH_CATEGORY = {
   E170:'C', E175:'C', E190:'C', E195:'C',
   CRJ2:'C', CRJ7:'C', CRJ9:'C', CRJX:'C', B712:'C',
   MD82:'C', MD83:'C', MD88:'C', F100:'C',
+  // B721/B722 (727-100/-200) added 2026-08-09 after a reported "aircraft
+  // type not recognized" against a FedEx B722 log - same whole-family-
+  // missing pattern as the 737 Classic gap above. Same authoritative
+  // source already used for the 747-8/A380/An-225 Category D correction
+  // (Boeing "FAA Reference Code and Approach Speeds for Boeing Aircraft,"
+  // 30 Mar 2016): 727-100 is FAA reference code C-III, 126kt approach
+  // speed; 727-200 is C-III, 136kt approach speed - both squarely inside
+  // the 121-140kt Category C band already used for the rest of this row.
+  B721:'C', B722:'C',
+  // A310 added 2026-08-09 in the same "popular MSFS planes" pass as the
+  // Category A/B additions below - verified two independent ways: Airbus's
+  // own official "ICAO/EASA Aerodrome Reference Code, FAA ADG and Aircraft
+  // Approach Category for Airbus Aircraft" document lists A310-300 as
+  // Category C, and a real published Vref at max landing weight (251km/h =
+  // 136kt) independently confirms it sits inside the 121-141kt Category C
+  // band. Cross-checking this Airbus document against other real numbers
+  // (see the widebody correction note below) found its table's column
+  // alignment unreliable for some rows after `pdftotext` extraction - A310
+  // is the one entry from it actually double-checked against a real Vref
+  // number, so it's the only one trusted from that source this session.
+  A310:'C',
   // D - widebody jets (141-166kt)
-  B762:'D', B763:'D', B764:'D', B772:'D', B773:'D', B77L:'D', B77W:'D',
+  // B762 (767-200/-200ER) and B772/B77L (777-200/-200LR) corrected from a
+  // wrongly-assigned Category D to their real Category C, found 2026-08-09
+  // while researching A310 in the same Boeing "FAA Reference Code and
+  // Approach Speeds for Boeing Aircraft" doc already cited above: 767-200
+  // is C-IV 133kt, 767-200ER is C-IV 140kt (both explicit rows, both
+  // safely under the 141kt C/D boundary); 777-200 is C-V 139kt, 777-200LR
+  // is C-V 138kt. B763 (767-300) deliberately NOT corrected alongside
+  // B762 despite being the same family - confirmed 767-300 and 767-300ER
+  // genuinely share the single B763 ICAO code, and 767-300ER is real
+  // Category D (145kt, D-IV) under that same code, so downgrading B763 to
+  // C risked a false "approach speed too fast" positive for a perfectly
+  // normal 767-300ER approach - left at D as the conservative, correct
+  // choice for an ambiguous shared code. B773/B77W (777-300/-300ER, both
+  // confirmed D-V 150kt) and B764/B788/B789 (767-400ER/787-8/787-9,
+  // already correctly D) are unaffected by this correction.
+  B762:'C', B763:'D', B764:'D', B772:'C', B773:'D', B77L:'C', B77W:'D',
   B788:'D', B789:'D', B78X:'D', B742:'D', B743:'D', B744:'D', MD11:'D',
   A332:'D', A333:'D', A339:'D', A342:'D', A343:'D', A345:'D', A346:'D',
   A359:'D', A35K:'D',
@@ -1778,8 +2072,8 @@ function recompute(){
   cfgv.topOfClimbLineIndex = PARSED.meta.topOfClimbLineIndex;
   EXCHANGES.forEach(ex=>{ ex.eval = ex.isPilotReport ? evaluatePilotReport(ex, cfgv) : evaluateExchange(ex, cfgv); });
   // A clearance that was still in progress (not busted) when a later
-  // instruction superseded it gets a plain "new instructions before
-  // reaching altitude/heading/speed X" note on its OWN card (see
+  // instruction superseded it gets a plain "new instructions given before
+  // arriving" note on its OWN card (see
   // evaluateExchange) - the altitude/time it
   // eventually reached belongs to the moment it was superseded, not to
   // this clearance's own readback, so surface that half of the story on
@@ -1794,30 +2088,30 @@ function recompute(){
       if(r.type==='ALT' && r.carryover && ex.altSupersededByIdx!=null){
         const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.altSupersededByIdx);
         if(!supersedingEx) return;
-        const assignedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
+        const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
         supersedingEx.eval.results.push({
           type:'ALT', status:'ok',
-          label:`Supersedes earlier ALT ${r.carryover.targetFt.toLocaleString()} clearance${assignedAt?` (assigned ${assignedAt})`:''}, still in progress`
+          label:`New instructions given before the aircraft reached the earlier ALT ${r.carryover.targetFt.toLocaleString()} clearance${issuedAt?` (issued ${issuedAt})`:''}`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
       if(r.type==='HDG' && r.carryover && ex.hdgSupersededByIdx!=null){
         const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.hdgSupersededByIdx);
         if(!supersedingEx) return;
-        const assignedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
+        const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
         supersedingEx.eval.results.push({
           type:'HDG', status:'ok',
-          label:`Supersedes earlier HDG ${r.carryover.targetHdg}° clearance${assignedAt?` (assigned ${assignedAt})`:''}, still in progress`
+          label:`New instructions given before the aircraft reached the earlier HDG ${r.carryover.targetHdg}° clearance${issuedAt?` (issued ${issuedAt})`:''}`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
       if(r.type==='SPD' && r.carryover && ex.spdSupersededByIdx!=null){
         const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.spdSupersededByIdx);
         if(!supersedingEx) return;
-        const assignedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
+        const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
         supersedingEx.eval.results.push({
           type:'SPD', status:'ok',
-          label:`Supersedes earlier SPD ${r.carryover.targetKt}kt clearance${assignedAt?` (assigned ${assignedAt})`:''}, still in progress`
+          label:`New instructions given before the aircraft reached the earlier SPD ${r.carryover.targetKt}kt clearance${issuedAt?` (issued ${issuedAt})`:''}`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }

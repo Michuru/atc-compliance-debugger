@@ -20,13 +20,13 @@ It runs entirely in a web browser, client-side — nothing in your log is ever u
 - **Green (✓ / ok)**: the aircraft did what was assigned, within a reasonable tolerance and a reasonable amount of time.
 - **Yellow (⚠ / warn)**: a minor deviation, a slow response, or an instruction that was superseded by a later one before it could be fully judged.
 - **Red (✕ / bad)**: a clear compliance failure — the aircraft never reached the assigned target, busted through it, or drifted well off it after initially complying.
-- **"Supersedes earlier X clearance... still in progress"**: this note means a previous instruction was still being carried out (aircraft correctly turning/climbing/slowing the right direction) when this new instruction interrupted it. That's not treated as a violation — ATC changed its mind before the pilot had a chance to finish.
+- **"...still turning/ascending/descending/speeding up/slowing... new instructions given before arriving"** (shown on the original instruction) together with **"New instructions given before the aircraft reached the earlier ALT/HDG/SPD X clearance"** (shown on the one that interrupted it): these two notes describe the same event from each instruction's own side. A previous instruction was still being carried out correctly (aircraft moving the right direction, confirmed from actual telemetry) when a new instruction cut it off. That's not treated as a violation — ATC changed its mind before the pilot had a chance to finish.
 - A badge with no target (e.g., "readback correct, contact ground 121.6") never shows a false readback warning — the tool knows the difference between an instruction with something to check and a plain acknowledgment.
 
 ### What each check means
 
 - **Heading**: did the aircraft turn to and hold the assigned heading? Includes vector instructions with no explicit direction ("fly heading X") and point-triggered instructions ("leave FIX heading X" — doesn't have to happen instantly, only once the aircraft actually passes that fix).
-- **Altitude**: did the aircraft climb/descend to and hold the assigned altitude? Understands "at pilot's discretion" (no response-time penalty), "maintain X until established" (continuing past X once on the localizer is correct, not a violation), "climb/descend via [procedure]" (can't independently verify the procedure's own altitude constraints, so this is marked "not independently verified" rather than guessed at), and point restrictions like "cross FIX at or above X" (only matters exactly at that fix).
+- **Altitude**: did the aircraft climb/descend to and hold the assigned altitude? Understands "at pilot's discretion" (no response-time penalty), "maintain X until established" (continuing past X once on the localizer is correct, not a violation), "climb/descend via [procedure]" (can't independently verify the procedure's own altitude constraints, so this is marked "not independently verified" rather than guessed at), point restrictions like "cross FIX at or above X" (only matters exactly at that fix), and "maintain VFR at or below/above X" (a Class B/C transition-altitude ceiling or floor — any altitude on the correct side of the number counts as compliant for as long as the restriction is in effect, not a specific target to converge on).
 - **Speed**: did the aircraft reduce/increase/hold the assigned speed ("reduce speed to 220 knots," "increase speed 240 knots," "maintain 250 knots")? Separately, two flat safety limits are always checked regardless of any ATC instruction: 250kt below 10,000ft, and a category-appropriate approach/landing speed ceiling (see "Aircraft category system" below). A speed restriction stays in effect until ATC issues a new one, explicitly cancels it ("resume normal speed"), or clears the aircraft to land.
 - **Response timing**: did the pilot start complying within a reasonable time after the instruction, scaled to the size of the change (a 170° turn is allowed more time than a 10° nudge; a small, fast change is never penalized just because a fixed radio/recognition delay dominates a short time window)?
 - **Readback**: did the pilot acknowledge instructions that actually assigned something to comply with? A frequency-change-only call with no clearance content never expects one.
@@ -35,12 +35,14 @@ It runs entirely in a web browser, client-side — nothing in your log is ever u
 
 ### Aircraft category system
 
-Not every aircraft should be held to the same speed/climb-rate numbers — a light single and a 747 fly approach at very different speeds. The tool maps each aircraft's ICAO type code (read from the log's SimBrief flight-plan URL) to an FAA approach category (A through E) and derives approach speed, landing speed, and climb/descent-rate expectations from that category. If the aircraft type isn't recognized, the tool falls back to generic flat defaults and shows an always-visible warning so you know the numbers might not be tuned for that aircraft.
+Not every aircraft should be held to the same speed/climb-rate numbers — a light single and a 747 fly approach at very different speeds. The tool maps each aircraft's ICAO type code (read from the log's own `Aircraft Type:` line, with a SimBrief flight-plan URL as a secondary source when present) to an FAA approach category (A through E) and derives approach speed, landing speed, and climb/descent-rate expectations from that category. If the aircraft type isn't recognized, the tool falls back to generic flat defaults and shows an always-visible warning so you know the numbers might not be tuned for that aircraft.
 
 ### Known data limitations (not bugs in this tool)
 
 - BeyondATC's own `[PlayerState]` telemetry logging is tied to radio transmissions, not a steady clock — once ATC stops talking, logging effectively stops too. This creates real gaps in exactly the areas compliance checks care about most, especially the final stretch before touchdown. When the tool can't verify something because there's no data, it says so explicitly rather than guessing.
-- A log doesn't have to span gate-to-gate — BeyondATC recording can start mid-flight or end before the aircraft comes to a stop. The tool detects and flags this rather than silently misreporting a partial flight as a complete one.
+- A log doesn't have to span gate-to-gate — BeyondATC recording can start mid-flight or end before the aircraft comes to a stop. The tool detects and flags this rather than silently misreporting a partial flight as a complete one. If a log or leg ends (e.g. a BeyondATC crash) too soon after an instruction for the pilot to plausibly have had time to comply, the tool reports "not enough data to judge compliance" rather than guessing at a violation.
+- The tool has no airspace-geometry database (no Class B/C/D boundaries, shelves, or corridors). It can confirm the pilot complied with whatever numeric restriction ATC actually assigned in the clearance (e.g., a "maintain VFR at or below X" ceiling), but it cannot independently verify whether an airspace clearance or entry was geometrically correct, or catch an aircraft entering controlled airspace without required contact — that's outside what log/telemetry data alone can answer.
+- Speed checks currently enforce only the flat 250kt-below-10,000ft rule. The stricter 200kt limit that applies under a Class B shelf or in a VFR corridor through Class B airspace (14 CFR §91.117(c)) is not yet checked.
 
 ---
 
@@ -65,7 +67,7 @@ Everything runs client-side in a single `.html` file — no build step, no serve
 | Heading tolerance | 5° | Judgment call |
 | Altitude tolerance | 150ft | Judgment call |
 | Speed tolerance | 10kt | Judgment call, consistent with observed real compliant-hold oscillation |
-| Speed limit below 10,000ft | 250kt | FAA regulatory limit |
+| Speed limit below 10,000ft | 250kt | FAA regulatory limit (14 CFR §91.117(a), per FAA JO 7110.65BB Para 5-7-2 NOTE 1) |
 | Approach speed target | Category-derived (90–180kt by category A–E) | FAA Pilot/Controller Glossary approach categories (1.3× stall speed at max landing weight) |
 | Landing-clearance speed target | Category-derived | Same as above |
 | Min. expected climb/descent rate | 500fpm (flat, all categories) | FAA AIM ¶4-4-10(d) |
@@ -79,15 +81,15 @@ Everything runs client-side in a single `.html` file — no build step, no serve
 
 | Category | Approach speed band | Example types in this tool |
 |---|---|---|
-| A | <91kt | C172, PA28, SR22, DA62, BE58, C208, PA24 |
-| B | 91–121kt | P180, TBM, PC12, most light/midsize business jets, BE60, C750, STAR |
-| C | 121–141kt | 737 family, A320 family, E-Jets, CRJ family |
-| D | 141–166kt | 777, 787, 747-8, A330/A350, A380 |
+| A | <91kt | C172, PA28, SR22, DA62, BE58, C208, PA24, DHC6 (Twin Otter), DHC2 (Beaver), AC11 (Commander 114) |
+| B | 91–121kt | P180, TBM, PC12, most light/midsize business jets, BE60, B58T (Baron 58P/58TC), C750, STAR, ATR72, DH8D (Dash 8 Q400), DC6 |
+| C | 121–141kt | 737 family, A320 family, E-Jets, CRJ family, 727 family, A310, 767-200/-200ER, 777-200/-200LR |
+| D | 141–166kt | 767-300ER, 777-300/-300ER, 787, 747-8, A330/A350, A380 |
 | E | ≥166kt | (no current member — no aircraft in this table has a verified Vref this high) |
 
 ### Known parsing/behavioral edge cases worth knowing about
 
-- **Speaker detection** relies on BeyondATC's consistent radio phraseology (ATC leads with the callsign; a pilot readback signs off *with* the callsign at the end), not the log's internal `sid` voice-slot id, which is not a reliable ATC/pilot marker. Player-initiated requests ("request IFR clearance," "request direct to fix," "ready for descent," etc.) break this pattern by leading with the callsign like ATC does - these are recognized separately by content, so they're correctly attributed to the pilot rather than misread as an ATC transmission.
+- **Speaker detection** relies on BeyondATC's consistent radio phraseology (ATC leads with the callsign; a pilot readback signs off *with* the callsign at the end), not the log's internal `sid` voice-slot id, which is not a reliable ATC/pilot marker. Player-initiated requests ("request IFR clearance," "request direct to fix," "ready for descent," etc.) and a player's own go-around report ("going around") break this pattern by leading with the callsign like ATC does - these are recognized separately by content, so they're correctly attributed to the pilot rather than misread as an ATC transmission. A narrow exclusion prevents the reverse mistake: genuine ATC lines that also happen to contain the word "request" (e.g. "proceed through the Class Delta as requested," "say request," "please make a taxi request") are correctly kept as ATC speech rather than misread as a pilot request.
 - **Callsign detection** prefers the log's own `Player Callsign:` line whenever it appears literally in the transcript (required for tail-number-style callsigns like `N452DA`), falling back to frequency-guessing a spoken "Word ####" pattern only when no hint matches.
 - **Multi-leg logs**: a single file can contain more than one flight back-to-back if BeyondATC wasn't restarted between them. The tool detects and separates these automatically.
 - **"Climb/descend via [procedure]"** clearances are recognized but not independently verified against the named SID/STAR's own altitude constraints (that data isn't in the log) — reported as "not independently verified from available states" rather than guessed at.
