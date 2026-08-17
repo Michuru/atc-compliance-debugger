@@ -99,6 +99,9 @@ header.topbar{
 .callsign .dot{color:var(--green);}
 .route{color:var(--text-dim);font-size:13px;}
 .route b{color:var(--text);}
+.route-actions{margin-top:6px;font-size:12px;display:flex;gap:16px;align-items:center;}
+.route-actions a,.route-actions .route-copy-btn{color:var(--blue);text-decoration:underline;cursor:pointer;background:none;border:none;font:inherit;padding:0;}
+.route-actions a:hover,.route-actions .route-copy-btn:hover{color:var(--text);}
 .statgrid{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap;}
 .stat{text-align:right;}
 .stat .n{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;line-height:1;}
@@ -236,6 +239,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
       <div>
         <div class="callsign" id="hCallsign">&mdash;</div>
         <div class="route" id="hRoute">&mdash;</div>
+        <div class="route-actions" id="hRouteActions" style="display:none;"></div>
         <div class="cat-note-inline" id="hCatNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
@@ -438,7 +442,7 @@ function parseLegLines(lines, startIdx, endIdx){
   let lastState = null, lastLVI = null, lastLVILine = -999, lastPlayerActionLine = -999;
   const states = [];       // all PlayerState samples, chronological
   const events = [];       // all Instruction events (ATC or PILOT)
-  let meta = { cruiseAlt:null, orig:null, dest:null, origrwy:null, destrwy:null, actype:null, route:null, playerCallsigns:[] };
+  let meta = { cruiseAlt:null, orig:null, dest:null, origrwy:null, destrwy:null, actype:null, route:null, simbriefUrl:null, playerCallsigns:[] };
 
   for(let i=startIdx;i<endIdx;i++){
     const line = lines[i];
@@ -456,6 +460,7 @@ function parseLegLines(lines, startIdx, endIdx){
         meta.destrwy = u.searchParams.get('destrwy');
         meta.actype = u.searchParams.get('type');
         meta.route = u.searchParams.get('route');
+        meta.simbriefUrl = m[1];
       }catch(e){}
       continue;
     }
@@ -571,6 +576,21 @@ function parseAltitudeClearance(text){
   // 1,346ft right after reaching 1,700 - that's localizer capture working,
   // not a violation).
   const untilEstablished = /until\s+established/i.test(text);
+  // "Remain clear of the (city) Bravo/Class B airspace" is the OPPOSITE of
+  // "cleared through/into the Bravo" below - the pilot is being kept
+  // *underneath* the Class B shelf, not authorized to enter it. This
+  // distinction matters for the 200kt speed check added alongside this
+  // flag: 14 CFR 91.117(c)/JO 7110.65BB Para 5-7-2.b's 200kt cap applies
+  // specifically to aircraft "operating beneath Class B airspace or in a
+  // VFR corridor designated through Class B airspace" - NOT to aircraft
+  // actually cleared into/through the Class B itself, which is a different
+  // operational context with no such blanket cap. Confirmed against every
+  // real vfrCeiling phrasing in the sample library: 4 instances all say
+  // "cleared through/into the [city] Bravo... maintain VFR at or below X"
+  // (entry, no 200kt cap), and exactly 1 says "maintain VFR at or below X,
+  // remain clear of the [city] Bravo airspace" (underlying, 200kt cap
+  // applies) - so this is a real, evidenced distinction, not a guess.
+  const underlyingBravo = /remain\s+clear\s+of\s+the\s+.*?\b(bravo|class\s*b)\b/i.test(text);
   // "Climb via [SID]"/"descend via [STAR]" (Pilot/Controller Glossary:
   // compliance with the *procedure's own* published restrictions) often
   // carries its own numeric override a little further into the sentence -
@@ -630,7 +650,7 @@ function parseAltitudeClearance(text){
   // handles this with a dedicated ceiling/floor check instead of the
   // compliedAt/bust machinery built for a specific target altitude.
   m = text.match(/maintain\s+VFR\s+at\s+or\s+(below|above)\s+([\d,]+)/i);
-  if(m) return { action:'maintain', targetFt: parseInt(m[2].replace(/,/g,'')), raw:m[0], vfrCeiling:true, direction:m[1].toLowerCase() };
+  if(m) return { action:'maintain', targetFt: parseInt(m[2].replace(/,/g,'')), raw:m[0], vfrCeiling:true, direction:m[1].toLowerCase(), underlyingBravo };
   m = text.match(/\bmaintain\s+([\d,]{3,})\s*(?:feet)?\b/i);
   if(m) return { action:'maintain', targetFt: parseInt(m[1].replace(/,/g,'')), raw:m[0], untilEstablished };
   // "Climb via [SID]" / "descend via [STAR]" complies with the *procedure's
@@ -801,6 +821,7 @@ function buildExchanges(parsed){
       if(hdgWindowEnd===Infinity){
         if(classified[j].heading){ hdgWindowEnd = atcEvents[j].lineIndex; hdgSupersededBy = 'heading'; hdgSupersededByIdx = atcEvents[j].lineIndex; }
         else if(classified[j].approach){ hdgWindowEnd = atcEvents[j].lineIndex; hdgSupersededBy = 'approach'; hdgSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].landing){ hdgWindowEnd = atcEvents[j].lineIndex; hdgSupersededBy = 'landing'; hdgSupersededByIdx = atcEvents[j].lineIndex; }
         else if(classified[j].cancel.heading){ hdgWindowEnd = atcEvents[j].lineIndex; hdgSupersededBy = 'ownNav'; hdgSupersededByIdx = atcEvents[j].lineIndex; }
       }
       if(spdWindowEnd===Infinity){
@@ -1555,7 +1576,15 @@ function evaluateExchange(ex, cfg){
   // through, not just until the next radio call) ----
   const spdWin = ex.clearance.altitude ? altWin : (ex.clearance.heading ? hdgWin : win);
   if(spdWin.length){
-    let worst250=null, worstApp=null;
+    let worst250=null, worstApp=null, worstBravo=null;
+    // 200kt cap (14 CFR 91.117(c)) only applies for the duration of a
+    // "remain clear of the Bravo" instruction, not a "cleared through/into
+    // the Bravo" one - see parseAltitudeClearance's underlyingBravo comment.
+    // Checked against this exchange's OWN clearance, not every vfrCeiling
+    // exchange in the window, since spdWin already spans exactly the
+    // duration this specific instruction is in effect (altWin, closed the
+    // same way every other ALT window is).
+    const underBravo = ex.clearance.altitude && ex.clearance.altitude.underlyingBravo;
     for(const s of spdWin){
       if(s.alt < 10000 && s.spd > cfg.speedBelow10k){
         if(!worst250 || s.spd>worst250.spd) worst250=s;
@@ -1563,6 +1592,9 @@ function evaluateExchange(ex, cfg){
       const pastTopOfClimb = cfg.topOfClimbLineIndex==null || s.lineIndex > cfg.topOfClimbLineIndex;
       if(s.inVector && pastTopOfClimb && s.alt < approachAltAbs && s.spd > cfg.approachSpeedLimit){
         if(!worstApp || s.spd>worstApp.spd) worstApp=s;
+      }
+      if(underBravo && s.spd > cfg.classBUnderlyingSpeedLimit){
+        if(!worstBravo || s.spd>worstBravo.spd) worstBravo=s;
       }
     }
     // Narrative framing (limit vs. actual, named the same way as the config
@@ -1577,6 +1609,10 @@ function evaluateExchange(ex, cfg){
     if(worstApp){
       const over = Math.round(worstApp.spd - cfg.approachSpeedLimit);
       results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`});
+    }
+    if(worstBravo){
+      const over = Math.round(worstBravo.spd - cfg.classBUnderlyingSpeedLimit);
+      results.push({type:'SPD', status:'bad', label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`});
     }
     if(ex.clearance.landing){
       const last = win[win.length-1];
@@ -1778,12 +1814,17 @@ const DEFAULT_CFG = {
   // "Maintain two eight zero knots") match parseSpeedClearance's real-log-
   // derived regex verbatim - independent confirmation the parser is
   // matching genuine controller phraseology, not just this tool's own
-  // sample library's dialect of it. NOTE 2 of the same paragraph also
-  // documents a real, currently-UNIMPLEMENTED rule this tool doesn't check
-  // at all: 200kt (not 250kt) under a Class B shelf or in a VFR corridor
-  // through Class B airspace, per 14 CFR 91.117(c) - see the `BACKLOG.md`
-  // entry logging this as a known gap.
+  // sample library's dialect of it. NOTE 2 of the same paragraph, plus Para
+  // 5-7-2.b's controller-assignment text, is what `classBUnderlyingSpeedLimit`
+  // below implements: 200kt (not 250kt) under a Class B shelf or in a VFR
+  // corridor through Class B airspace, per 14 CFR 91.117(c) - gated on
+  // `underlyingBravo` (set in parseAltitudeClearance), not on every
+  // vfrCeiling clearance, since "cleared through/into the Bravo" is a
+  // different operational context this 200kt cap doesn't apply to. See the
+  // `BACKLOG.md` entry for the citation text and the evidence this
+  // distinction is real, not assumed.
   speedBelow10k: {v:250, label:'Speed limit below 10,000ft', unit:'kt'},
+  classBUnderlyingSpeedLimit: {v:200, label:'Speed limit beneath Class B / in a VFR corridor', unit:'kt'},
   approachAltThreshold: {v:1000, label:'"On approach" altitude', unit:'ft AGL~'},
   approachSpeedLimit: {v:180, label:'Approach speed target', unit:'kt'},
   landingSpeedLimit: {v:160, label:'Landing-clearance speed target', unit:'kt'},
@@ -2168,6 +2209,75 @@ function refineSpeakersByCallsign(events, callsign){
   const esc = escapeRegex(callsign);
   const startRe = new RegExp('^'+esc+'\\b', 'i');
   const endRe = new RegExp('\\b'+esc+'[.,]?\\s*$', 'i');
+  // Real-world "initial contact on a new frequency" pilot phraseology (FAA
+  // AIM 4-2-3: state who you're calling, THEN your own callsign) - "Gdansk
+  // Departure, Wizzair 37KJ, good evening, passing 2,200 climbing to
+  // FL110." - leads with the FACILITY being called, not the aircraft's own
+  // callsign, and doesn't end with it either (a position/altitude report
+  // follows), so it matches neither startRe nor endRe above and fell
+  // through to classify()'s bare default of 'ATC'. Found via a log named
+  // specifically to report this ("message incorrect ATC and Pilot
+  // Callouts.txt", WZZ37KJ, EPGD-ESSA) and confirmed systemic by auditing
+  // the full sample library: the identical shape was misclassified 86
+  // times across 24 of the 35 logs, in every log with airline/IFR-style
+  // frequency handoffs - not a one-off.
+  // Distinguished from real ATC phrasing that shares a similar "<X>,
+  // CALLSIGN, good Y" shape - a frequency-handoff sign-off like "Center on
+  // 133.4, Delta 2201, have a good evening." or "Contact Sweden Control
+  // 134.455, Wizzair 37KJ, good day." - by requiring the greeting to sit
+  // immediately after the callsign (comma-adjacent; "have a good X" never
+  // matches this, since "have a" breaks the adjacency) AND for something
+  // to follow the greeting: a real ATC sign-off ends the transmission
+  // right at "good day."/"good evening.", while the pilot's own check-in
+  // always continues with a position/altitude report after it. Every
+  // ATC-classified event in the library matching the callsign-adjacent-
+  // greeting shape was checked individually before adding this: every case
+  // where the greeting is the last thing said is genuine ATC, every case
+  // with content trailing the greeting is a genuine pilot check-in - no
+  // exceptions found either way.
+  const checkInRe = new RegExp(esc+'\\s*,\\s*good\\s+(morning|afternoon|evening|day)\\b', 'i');
+  const checkInTailRe = new RegExp(esc+'\\s*,\\s*good\\s+(morning|afternoon|evening|day)\\s*[.!]?\\s*$', 'i');
+  // Same check-in report, greeting-less variant - "Sweden Control, Wizzair
+  // 37KJ, passing FL276 climbing to FL380 direct PENOR." (no "good
+  // evening"). Found in the same target log right after fixing the
+  // greeting variant above - two of its own six check-in lines lack a
+  // greeting entirely and still fell through to the default 'ATC'. Safe as
+  // a bare content match without needing a "not the very end" guard the
+  // way checkInRe needs one: audited every ATC-classified event in the
+  // full sample library where the callsign is immediately followed by one
+  // of these verbs, and unlike "good day"/"good evening" (which real ATC
+  // sign-offs also use), no genuine ATC line anywhere in the library
+  // follows the callsign with a position-report verb - ATC's own
+  // callsign-adjacent phrasing is always either a sign-off ("good day.",
+  // "take care.") or nothing, never "passing"/"leaving"/etc.
+  const posReportRe = new RegExp(esc+'\\s*,\\s*(passing|leaving|climbing|descending|through|out of|crossing)\\b', 'i');
+  // Pilot acknowledgment readbacks that open with crew-only vocabulary
+  // ("We'll...", "Wilco, ...", "Roger, we'll...") instead of trailing with
+  // the callsign the way a normal readback does - e.g. "We'll contact
+  // tower 119.1 when ready for start or taxi, N65DT, see you, thanks." or
+  // "Wilco, heading direct BLACA then resume own navigation, Broadsword
+  // 925, thanks." Same root cause as the two branches above (real content
+  // follows the callsign - "thanks."/"see you." - so endRe's bare
+  // trailing-callsign match fails), found while auditing the library for
+  // real ATC counterexamples to posReportRe. Safe without any exclusion
+  // clause: ATC never says "we'll" (only the flight crew can refer to
+  // itself that way) or "thanks" anywhere in this log format - every
+  // instance found across the full library was a genuine pilot
+  // acknowledgment, several previously misclassified 'ATC', a couple
+  // 'UNKNOWN' (no `sid` match within the classify() fallback window).
+  const pilotAckRe = new RegExp("^(we'?ll|wilco|roger,?\\s+we'?ll)\\b[\\s\\S]*"+esc, 'i');
+  // CTAF self-announce broadcast at an untowered field - "<Airport>
+  // traffic, <callsign>, <position/intent>, <Airport>." (repeating the
+  // airport name at both ends is the real self-announce convention -
+  // confirmed via `Player - Class Delta entered without tower contact.log`
+  // and `Player - KFRG NY Bravo clearance altitude question.log`, e.g.
+  // "Harriman And West traffic, N738FE, at Ramp 5, taxiing to runway 29,
+  // Harriman And West."). Always the pilot's own broadcast, never ATC -
+  // requiring the callsign to sit immediately after "traffic," (rather
+  // than a bare content match on the word "traffic") keeps this from ever
+  // matching a genuine ATC traffic advisory, which addresses the player by
+  // its own callsign first and never phrases it this way.
+  const ctafRe = new RegExp('\\btraffic\\s*,\\s*'+esc+'\\b', 'i');
   events.forEach(e=>{
     // A player self-report (playerActionTriggered - set in parseLegLines
     // from either a [PlayerAction] tag or matching known self-report
@@ -2180,6 +2290,10 @@ function refineSpeakersByCallsign(events, callsign){
     const t = e.text.trim();
     if(startRe.test(t)) e.speaker = 'ATC';
     else if(endRe.test(t)) e.speaker = 'PILOT';
+    else if(checkInRe.test(t) && !checkInTailRe.test(t)) e.speaker = 'PILOT';
+    else if(posReportRe.test(t)) e.speaker = 'PILOT';
+    else if(pilotAckRe.test(t)) e.speaker = 'PILOT';
+    else if(ctafRe.test(t)) e.speaker = 'PILOT';
   });
 }
 
@@ -2294,6 +2408,51 @@ function loadLeg(idx){
   if(m.actype) routeParts.push(`${m.actype}`);
   if(m.cruiseAlt) routeParts.push(`FL${Math.round(m.cruiseAlt/100)}`);
   document.getElementById('hRoute').innerHTML = routeParts.join(' &nbsp;·&nbsp; ') || 'Route info not found in log';
+
+  // Quick access to the SimBrief flight plan this log was generated from,
+  // plus a copyable route string for pasting into Navigraph Charts - only
+  // shown when the log actually has SimBrief-sourced data (MSFS-loaded
+  // flight plans have neither meta.route nor meta.simbriefUrl, same
+  // conditional-hide pattern as hCatNote/hFlightNote/hXpdrNote below).
+  // meta.simbriefUrl is BeyondATC's own logged pre-fill link
+  // (dispatch.simbrief.com/options/custom?...&route=...) that recreates
+  // this flight's parameters on SimBrief's own site - not a link to a
+  // specific filed/generated OFP, since no such link exists anywhere in
+  // this log format (confirmed 2026-08-17, see BACKLOG.md).
+  const routeActions = document.getElementById('hRouteActions');
+  if(m.route){
+    const parts = [];
+    if(m.simbriefUrl){
+      parts.push(`<a href="${m.simbriefUrl}" target="_blank" rel="noopener">Open in SimBrief</a>`);
+    }
+    const copyStr = (m.orig && m.dest) ? `${m.orig} ${m.route} ${m.dest}` : m.route;
+    parts.push(`<button type="button" class="route-copy-btn" id="hRouteCopyBtn">Copy Route</button>`);
+    routeActions.innerHTML = parts.join(' &nbsp;·&nbsp; ');
+    routeActions.style.display = 'flex';
+    const copyBtn = document.getElementById('hRouteCopyBtn');
+    copyBtn.addEventListener('click', ()=>{
+      const showCopied = ()=>{
+        const original = copyBtn.textContent;
+        copyBtn.textContent = 'Copied!';
+        setTimeout(()=>{ copyBtn.textContent = original; }, 1500);
+      };
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(copyStr).then(showCopied).catch(()=>{
+          // Clipboard permission denied or unsupported in this context -
+          // fall back to a manual-select input so the copy still works.
+          const tmp = document.createElement('input');
+          tmp.readOnly = true; tmp.value = copyStr;
+          tmp.style.position = 'fixed'; tmp.style.left = '-9999px';
+          document.body.appendChild(tmp);
+          tmp.select();
+          document.body.removeChild(tmp);
+        });
+      }
+    });
+  } else {
+    routeActions.style.display = 'none';
+    routeActions.innerHTML = '';
+  }
 
   buildLegPicker();
   buildConfigPanel();
