@@ -5,3 +5,5 @@ A single-file, client-side tool that cross-references a BeyondATC `Player.log` a
 **Usage**: open [`atc-compliance-debugger.html`](atc-compliance-debugger.html) in any modern browser and load a `Player.log` file (drag-and-drop or file picker). Nothing is uploaded — everything runs client-side.
 
 See [`SPEC.md`](SPEC.md) for a full functional spec: what each check means, how to read a report, the exact thresholds and their sources, and known data/parsing limitations.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for release history.
