@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BeyondATC Compliance Debugger</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root{
+  --bg:#080c0d;
+  --panel:#0e1517;
+  --panel-2:#121b1e;
+  --line:#1e2b2e;
+  --text:#d6ece5;
+  --text-dim:#7d9691;
+  --text-dimmer:#4d605d;
+  --green:#3ddc91;
+  --green-dim:#1d4d38;
+  --amber:#ffb648;
+  --blue:#5ec8ff;
+}
+*{box-sizing:border-box;}
+html,body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:'JetBrains Mono', ui-monospace, monospace;
+  min-height:100vh;
+}
+body{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  padding:64px 20px 40px;
+}
+.wrap{
+  width:100%;
+  max-width:720px;
+}
+.eyebrow{
+  color:var(--green);
+  font-size:13px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  margin:0 0 10px;
+}
+h1{
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:700;
+  font-size:clamp(28px,5vw,42px);
+  line-height:1.15;
+  margin:0 0 18px;
+  color:var(--text);
+}
+.lede{
+  color:var(--text-dim);
+  font-size:15px;
+  line-height:1.7;
+  margin:0 0 36px;
+}
+.lede strong{color:var(--text);font-weight:600;}
+
+.cta{
+  display:block;
+  text-align:center;
+  background:var(--green);
+  color:#04140d;
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:700;
+  font-size:18px;
+  text-decoration:none;
+  padding:18px 24px;
+  border-radius:10px;
+  border:1px solid var(--green);
+  transition:transform .12s ease, box-shadow .12s ease;
+  box-shadow:0 0 0 rgba(61,220,145,0);
+}
+.cta:hover{
+  transform:translateY(-1px);
+  box-shadow:0 8px 24px rgba(61,220,145,0.25);
+}
+.cta .sub{
+  display:block;
+  font-family:'JetBrains Mono', monospace;
+  font-weight:500;
+  font-size:12px;
+  color:#0a3323;
+  margin-top:4px;
+  letter-spacing:0.3px;
+}
+
+.usage{
+  color:var(--text-dimmer);
+  font-size:13px;
+  text-align:center;
+  margin:14px 0 0;
+}
+.usage a{color:var(--text-dim);}
+
+.divider{
+  height:1px;
+  background:var(--line);
+  margin:40px 0 28px;
+}
+
+.links{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+  gap:12px;
+}
+.linkcard{
+  display:block;
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:16px 18px;
+  text-decoration:none;
+  color:var(--text);
+  transition:border-color .12s ease, background .12s ease;
+}
+.linkcard:hover{
+  border-color:var(--green-dim);
+  background:var(--panel-2);
+}
+.linkcard .label{
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:600;
+  font-size:15px;
+  color:var(--text);
+  margin-bottom:4px;
+}
+.linkcard .desc{
+  font-size:12px;
+  color:var(--text-dim);
+  line-height:1.5;
+}
+
+footer{
+  margin-top:48px;
+  text-align:center;
+  color:var(--text-dimmer);
+  font-size:12px;
+  line-height:1.8;
+}
+footer a{color:var(--text-dim);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">BeyondATC Add-on Testing</p>
+  <h1>BeyondATC Compliance Debugger</h1>
+  <p class="lede">
+    Load a <strong>Player.log</strong> and see every ATC instruction paired with what the aircraft
+    actually did — heading, altitude, and speed compliance, checked automatically. Built as an
+    elimination step before filing bugs against BeyondATC itself: if this tool shows the pilot
+    correctly following every instruction and BeyondATC's own ATC still misbehaved, that's evidence
+    the bug is in BeyondATC, not the pilot.
+  </p>
+
+  <a class="cta" href="atc-compliance-debugger.html">
+    Open the Tool
+    <span class="sub">atc-compliance-debugger.html — runs entirely in your browser, nothing uploaded</span>
+  </a>
+  <p class="usage">Drag and drop a <code>Player.log</code> file onto the page once it loads, or use the file picker.</p>
+
+  <div class="divider"></div>
+
+  <div class="links">
+    <a class="linkcard" href="https://github.com/Michuru/atc-compliance-debugger/blob/main/SPEC.md">
+      <div class="label">Functional Spec</div>
+      <div class="desc">What each check means, how to read a report, exact thresholds and sources.</div>
+    </a>
+    <a class="linkcard" href="https://github.com/Michuru/atc-compliance-debugger/releases">
+      <div class="label">Release Notes</div>
+      <div class="desc">What changed in each version, newest first.</div>
+    </a>
+    <a class="linkcard" href="https://github.com/Michuru/atc-compliance-debugger">
+      <div class="label">Source Code</div>
+      <div class="desc">Full repo on GitHub — one HTML file, no build step, no dependencies.</div>
+    </a>
+  </div>
+
+  <footer>
+    Maintained independently of BeyondATC — not an official BeyondATC product.<br>
+    Questions or corrections about this tool: use the <a href="https://github.com/Michuru/atc-compliance-debugger/issues">issue tracker</a>.
+  </footer>
+
+</div>
+</body>
+</html>
