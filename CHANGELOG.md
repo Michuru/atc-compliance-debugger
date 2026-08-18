@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.2.1] - 2026-08-18
+
+### Fixed
+- "Minimum approach speed" - real ATC phraseology with no explicit knot value - previously matched nothing at all and produced zero compliance results for the exchange, not just a wrong verdict. Now recognized and resolved against the aircraft's own category-derived approach-speed limit, labeled `"Xkt minimum approach speed"` so it's never mistaken for a number ATC actually spoke.
+
 ## [1.2.0] - 2026-08-18
 
 ### Added

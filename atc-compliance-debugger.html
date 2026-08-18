@@ -710,10 +710,24 @@ function parseHeadingClearance(text){
 // eval results produced for the exchange at all.
 function parseSpeedClearance(text){
   const m = text.match(/(reduce speed|increase speed|slow to|maintain)(?:\s+to)?\s*(\d{2,3})\s*(?:knots?|kts?)\b/i);
-  if(!m) return null;
-  const verb = m[1].toLowerCase();
-  const action = verb.startsWith('increase') ? 'increase' : (verb.startsWith('reduce') || verb==='slow to') ? 'reduce' : 'maintain';
-  return { targetKt: parseInt(m[2]), raw:m[0], action };
+  if(m){
+    const verb = m[1].toLowerCase();
+    const action = verb.startsWith('increase') ? 'increase' : (verb.startsWith('reduce') || verb==='slow to') ? 'reduce' : 'maintain';
+    return { targetKt: parseInt(m[2]), raw:m[0], action };
+  }
+  // "Minimum approach speed" - real Pilot/Controller Glossary phraseology
+  // with no explicit knot value, unlike every other speed clearance above -
+  // confirmed via `Player-prev - speed compliance issue.log` (VOZ1537,
+  // YMHB-YSSY): two real "minimum approach speed" instructions previously
+  // matched nothing here, left clearance.speed null, and produced zero
+  // eval results - no indication ATC ever asked for a speed change, let
+  // alone whether the aircraft complied. targetKt stays null here since the
+  // real number (the aircraft's category-based approach speed) isn't known
+  // until evaluateExchange runs with cfg - see the `implied` handling
+  // there, which resolves it from cfg.approachSpeedLimit.v.
+  const min = text.match(/minimum\s+approach\s+speed/i);
+  if(min) return { targetKt:null, implied:true, raw:min[0], action:'reduce' };
+  return null;
 }
 
 function parseApproachClearance(text){
@@ -1641,7 +1655,13 @@ function evaluateExchange(ex, cfg){
   // 240 kts", "reduce speed 180 kts", plus a "resume normal speed"
   // cancellation) parsed to `null` and produced zero eval results.
   if(ex.clearance.speed){
-    const { targetKt, action } = ex.clearance.speed;
+    const { action, implied } = ex.clearance.speed;
+    // Implied targets ("minimum approach speed", see parseSpeedClearance)
+    // carry no ATC-stated number - resolve it from the aircraft's own
+    // category-based approach speed instead, and say so explicitly in the
+    // label so a reader doesn't mistake it for a number ATC actually spoke.
+    const targetKt = ex.clearance.speed.targetKt != null ? ex.clearance.speed.targetKt : cfg.approachSpeedLimit;
+    const targetLabel = implied ? `${targetKt}kt minimum approach speed` : `${targetKt}kt`;
     const spdWinFull = ex.spdWindowStates;
     const compliedAt = spdWinFull.find(s => Math.abs(s.spd - targetKt) <= cfg.spdTol);
     if(compliedAt){
@@ -1671,9 +1691,9 @@ function evaluateExchange(ex, cfg){
         const driftKt = Math.round(worstDrift.spd - targetKt);
         const status = Math.abs(driftKt) <= cfg.spdTol*2 ? 'warn' : 'bad';
         const dir = driftKt > 0 ? 'sped up to' : 'slowed to';
-        results.push({type:'SPD', status, label:`SPD ${targetKt}kt — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`});
+        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`});
       } else {
-        results.push({type:'SPD', status: responseStatus, label:`SPD ${targetKt}kt — reached${note}`});
+        results.push({type:'SPD', status: responseStatus, label:`SPD ${targetLabel} — reached${note}`});
       }
     } else if(spdWinFull.length){
       const finalSpd = spdWinFull[spdWinFull.length-1];
@@ -1692,10 +1712,10 @@ function evaluateExchange(ex, cfg){
         // ATC-assigned verb, so 'maintain X knots' no longer needs a
         // direction-neutral fallback either.
         const progressVerb = finalSpd.spd > startState.spd ? 'still speeding up' : 'still slowing';
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetKt}kt — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt}});
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt, implied}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
-        const label = `SPD ${targetKt}kt — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
+        const label = `SPD ${targetLabel} — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
         const status = ex.spdSuperseded ? 'warn' : 'bad';
         results.push({type:'SPD', status, label});
       }
@@ -2150,9 +2170,10 @@ function recompute(){
         const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.spdSupersededByIdx);
         if(!supersedingEx) return;
         const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
+        const targetLabel = r.carryover.implied ? `${r.carryover.targetKt}kt minimum approach speed` : `${r.carryover.targetKt}kt`;
         supersedingEx.eval.results.push({
           type:'SPD', status:'ok',
-          label:`New instructions given before the aircraft reached the earlier SPD ${r.carryover.targetKt}kt clearance${issuedAt?` (issued ${issuedAt})`:''}`
+          label:`New instructions given before the aircraft reached the earlier SPD ${targetLabel} clearance${issuedAt?` (issued ${issuedAt})`:''}`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
