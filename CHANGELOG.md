@@ -4,7 +4,7 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
-## [1.2.0] - 2026-08-17
+## [1.2.0] - 2026-08-18
 
 ### Added
 - 200kt speed limit check while a "remain clear of the Bravo/Class B" instruction is in effect (14 CFR 91.117(c)). Scoped specifically to that phrasing - does not apply when the aircraft is instead cleared into or through the Class B itself, a different real-world situation with no such cap.
