@@ -211,8 +211,8 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .readback{color:var(--text-dim);font-style:italic;font-size:12.5px;margin-top:6px;}
 .readback .who{color:var(--text-dimmer);font-style:normal;font-size:10px;text-transform:uppercase;margin-right:6px;}
 .rawvoice{background:var(--panel-2);border-radius:6px;padding:8px 10px;color:var(--text-dimmer);font-size:11.5px;margin-top:10px;}
-.hdg-compass{display:flex;align-items:center;gap:12px;background:var(--panel-2);border-radius:6px;padding:8px 10px;margin-top:10px;}
-.hdg-compass-legend{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--text-dim);}
+.mini-diagram{display:flex;align-items:center;gap:12px;background:var(--panel-2);border-radius:6px;padding:8px 10px;margin-top:10px;}
+.mini-diagram-legend{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--text-dim);}
 
 #emptyState{text-align:center;padding:60px 20px;color:var(--text-dimmer);}
 
@@ -501,6 +501,15 @@ function parseLegLines(lines, startIdx, endIdx){
           rawVoice: spoken,
           sid: null,
           speaker: 'PILOT',
+          // Marks this as coming from the always-pilot [Speech Transcription]
+          // pipeline (a separate pipeline from [Instruction]/[LocalVoiceInput],
+          // never ATC - see the module-level note near RE_SPEECH_AI) so
+          // refineSpeakersByCallsign's startRe heuristic can't overwrite it
+          // below - a real player voice line that happens to open with the
+          // callsign and no comma ("N39NG request landing at Scottsdale", no
+          // [PlayerAction] tag in this log format) otherwise matches startRe
+          // exactly like a genuine ATC instruction does.
+          speechTranscription: true,
           state: lastState
         });
       }
@@ -1151,7 +1160,7 @@ function evaluateExchange(ex, cfg){
         // readback - carried over separately (see the recompute() pass
         // below) and surfaced on the superseding exchange instead, same
         // pattern as the ALT carryover above.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward it, new instructions given before arriving`, carryover:{targetHdg:target}});
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward it, new instructions given before arriving`, carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -1329,7 +1338,7 @@ function evaluateExchange(ex, cfg){
     const altLiftoffPending = isOnGround(startState) && !liftoffState;
     const progressStart = isOnGround(startState) ? (liftoffState || startState) : startState;
     if(bust){
-      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — overshot / busted altitude`});
+      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — overshot / busted altitude`, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'bad', tol:cfg.altTol}});
     } else if(compliedAt){
       const delay = progressStart ? compliedAt.timeMin - progressStart.timeMin : null;
       // A big altitude change simply takes longer to fly than a small one -
@@ -1438,7 +1447,7 @@ function evaluateExchange(ex, cfg){
         // and no longer needs a direction-neutral fallback for 'maintain'.
         const progressVerb = finalState.alt > progressStart.alt ? 'still ascending' : 'still descending';
         const progress = isOnGround(startState) ? 'parked when issued' : progressVerb;
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, new instructions given before arriving`, carryover:{targetFt}});
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, new instructions given before arriving`, carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}});
       } else {
         let label;
         if(action==='descend' && diff > cfg.altTol){
@@ -1495,7 +1504,7 @@ function evaluateExchange(ex, cfg){
           results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — instruction given shortly before the recording ended, not enough data to judge compliance`});
         } else {
           const status = ex.altSuperseded ? (sustainedNonProgress ? 'bad' : 'warn') : 'bad';
-          results.push({type:'ALT', status, label});
+          results.push({type:'ALT', status, label, diagram:{target:targetFt, actual:Math.round(finalState.alt), status, tol:cfg.altTol}});
         }
       }
     }
@@ -1712,12 +1721,12 @@ function evaluateExchange(ex, cfg){
         // ATC-assigned verb, so 'maintain X knots' no longer needs a
         // direction-neutral fallback either.
         const progressVerb = finalSpd.spd > startState.spd ? 'still speeding up' : 'still slowing';
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt, implied}});
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetLabel} — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
         const status = ex.spdSuperseded ? 'warn' : 'bad';
-        results.push({type:'SPD', status, label});
+        results.push({type:'SPD', status, label, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}});
       }
     }
   }
@@ -1915,6 +1924,20 @@ const AIRCRAFT_APPROACH_CATEGORY = {
   // max weights - comfortably Category A. DHC-2: Vso ~39kt (45mph, flaps
   // extended) - even more comfortably Category A.
   DHC6:'A', DHC2:'A',
+  // M600 (Piper M600, PA-46-based single-engine turboprop) added
+  // 2026-08-19 while cross-checking a queued VFR Use Case log (`Player -
+  // KSDL Class Delta no landing option, Bravo clearance below shelf.log`,
+  // N39NG) - like AC11/DHC6/DHC2 above, surfaced only after the
+  // meta.actype fix since this log has no SimBrief plan. Real POH data
+  // (already transcribed from `Other Manuals/M600-Manual.pdf` into
+  // `msfs_performance_calculator.html`'s DB.fsreborn-m600.vspeeds): Vref
+  // (final approach) 85 KIAS, Vso (landing config) 62 KIAS - both
+  // comfortably under the 91kt Category A/B boundary despite the M600
+  // being a fast (VMO 251kt) turboprop at cruise. Don't assume "turboprop"
+  // implies Category B the way TBM/PC12 above do - those are heavier,
+  // faster-on-approach airframes; the M600's actual approach speed sits
+  // with the piston singles, not with them.
+  M600:'A',
   // B - turboprops & light/midsize business jets (91-121kt)
   P180:'B', TBM7:'B', TBM8:'B', TBM9:'B', PC12:'B', PC24:'B',
   C525:'B', C56X:'B', C550:'B', C650:'B', C680:'B', C700:'B',
@@ -2299,15 +2322,50 @@ function refineSpeakersByCallsign(events, callsign){
   // matching a genuine ATC traffic advisory, which addresses the player by
   // its own callsign first and never phrases it this way.
   const ctafRe = new RegExp('\\btraffic\\s*,\\s*'+esc+'\\b', 'i');
+  // Arrival check-in on a new frequency, an aircraft-type/position variant
+  // of checkInRe/posReportRe above - "<Facility>, <Callsign>, <type or
+  // position clause>, inbound for landing[, with information <ATIS
+  // letter>]." (e.g. "Guernsey Tower, N731GV, Beechcraft Bonanza 36,
+  // inbound for landing." / "Scottsdale Tower, N39NG, Piper M600, inbound
+  // for landing, with information Q."). Same root cause as those two -
+  // leads with the facility, and the clause between the callsign and the
+  // content (an aircraft type or position, not directly "good day"/
+  // "passing X") means it matches neither existing variant. "Inbound for
+  // landing" is pilot-describing-self language no ATC line in this format
+  // ever uses about itself, so - like ctafRe's "traffic," signal - this is
+  // safe as a bare content match with no callsign-adjacency requirement.
+  // Found via `Player - KSDL Class Delta no landing option, Bravo
+  // clearance below shelf.log` (N39NG's own second-frequency landing
+  // request, the exact moment the user's use-case write-up flagged as
+  // "could request inbound landing no problem" - previously surfaced as a
+  // phantom no-content "ATC instruction" with no readback, obscuring the
+  // actual event). Audited the full sample library for "inbound for
+  // landing" before adding this: every match is this exact real pilot
+  // check-in shape (`Player - KGUR inbound shows request departure.log`'s
+  // N731GV, `Player - SoCal XC San Diego Bravo breach and frequency
+  // loop.log`'s N44XD ×2, this log's N39NG), zero ATC counterexamples; the
+  // one CTAF-shaped match ("Nantucket Memorial traffic, N738FE, ...
+  // inbound for landing, Nantucket Memorial.") is already covered by
+  // ctafRe above.
+  const arrivalCheckInRe = /\binbound for landing\b/i;
   events.forEach(e=>{
     // A player self-report (playerActionTriggered - set in parseLegLines
     // from either a [PlayerAction] tag or matching known self-report
-    // content, see RE_PLAYER_ACTION/RE_PILOT_SELF_REPORT) is definitively
-    // PILOT speech - don't let this heuristic override it. Most of these
-    // reports lead with the callsign exactly like real ATC phraseology
-    // does ("N452DA, ready for descent."), which is
-    // precisely the case startRe below would otherwise misclassify as ATC.
-    if(e.playerActionTriggered) return;
+    // content, see RE_PLAYER_ACTION/RE_PILOT_SELF_REPORT) or a real player
+    // voice line (speechTranscription - the [Speech Transcription] pipeline,
+    // always pilot by construction, see parseLegLines) is definitively
+    // PILOT speech - don't let this heuristic override either one. Most of
+    // these lines lead with the callsign exactly like real ATC phraseology
+    // does ("N452DA, ready for descent.", "N39NG request landing at
+    // Scottsdale"), which is precisely the case startRe below would
+    // otherwise misclassify as ATC. Found via `Player - KSDL Class Delta no
+    // landing option, Bravo clearance below shelf.log`: a real player voice
+    // request surfaced as its own phantom no-content "ATC instruction" card
+    // (speaker flipped ATC, zero clearance content, no readback) - purely a
+    // transcript-accuracy bug, same shape as the fifth speaker-
+    // misclassification gap above, not a grading regression, since a bare
+    // request carries no clearance for evaluateExchange to grade either way.
+    if(e.playerActionTriggered || e.speechTranscription) return;
     const t = e.text.trim();
     if(startRe.test(t)) e.speaker = 'ATC';
     else if(endRe.test(t)) e.speaker = 'PILOT';
@@ -2315,6 +2373,7 @@ function refineSpeakersByCallsign(events, callsign){
     else if(posReportRe.test(t)) e.speaker = 'PILOT';
     else if(pilotAckRe.test(t)) e.speaker = 'PILOT';
     else if(ctafRe.test(t)) e.speaker = 'PILOT';
+    else if(arrivalCheckInRe.test(t)) e.speaker = 'PILOT';
   });
 }
 
@@ -2601,13 +2660,17 @@ function statusIcon(status){
   return status==='ok' ? '✓' : status==='warn' ? '⚠' : status==='bad' ? '✕' : '·';
 }
 
-// Mini compass for a missed heading: magenta dashed line for the assigned
-// course (matching real GPS/FMS moving-map convention for the selected
-// course), solid status-colored line for where the aircraft actually ended
-// up - a visual assigned-vs-actual comparison instead of two numbers to
-// mentally diff.
-function headingCompassSvg({target, actual, status}){
-  const color = status==='bad' ? 'var(--red)' : 'var(--amber)';
+// Mini compass for a missed (or still-in-progress carryover) heading:
+// magenta dashed line for the assigned course (matching real GPS/FMS
+// moving-map convention for the selected course), solid status-colored line
+// for where the aircraft actually ended up (or currently sits, for a
+// carryover still turning toward it) - a visual assigned-vs-actual
+// comparison instead of two numbers to mentally diff. status is 'ok' for a
+// carryover still correctly progressing, 'warn'/'bad' for a genuine miss -
+// unlike the linear bar below, no tolerance band is drawn here since a
+// heading has no meaningful "close enough" wedge to shade at this scale.
+function headingCompassSvg({target, actual, status, actualLabel='actual'}){
+  const color = status==='bad' ? 'var(--red)' : status==='warn' ? 'var(--amber)' : 'var(--green)';
   const cx=40, cy=40, r=30;
   const pt = deg => {
     const rad = (deg-90) * Math.PI/180;
@@ -2615,7 +2678,7 @@ function headingCompassSvg({target, actual, status}){
   };
   const [tx,ty] = pt(target);
   const [ax,ay] = pt(actual);
-  return `<div class="hdg-compass">
+  return `<div class="mini-diagram">
     <svg width="80" height="80" viewBox="0 0 80 80">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="1.5"/>
       <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dimmer)">N</text>
@@ -2623,9 +2686,43 @@ function headingCompassSvg({target, actual, status}){
       <line x1="${cx}" y1="${cy}" x2="${ax}" y2="${ay}" stroke="${color}" stroke-width="2.5"/>
       <circle cx="${cx}" cy="${cy}" r="1.6" fill="var(--text)"/>
     </svg>
-    <div class="hdg-compass-legend">
+    <div class="mini-diagram-legend">
       <span style="color:var(--magenta)">┄ assigned ${target}°</span>
-      <span style="color:${color}">━ actual ${actual}°</span>
+      <span style="color:${color}">━ ${actualLabel} ${actual}°</span>
+    </div>
+  </div>`;
+}
+
+// Linear equivalent of headingCompassSvg for ALT/SPD assigned-vs-actual
+// comparisons, where "direction" is a straight line, not a compass rose: a
+// magenta dashed tick for the assigned target, a solid status-colored dot
+// for where the aircraft actually ended up (or currently sits, for a
+// carryover), and a dim shaded band around the target showing the
+// tolerance actually used to judge compliance. Values are clamped into a
+// fixed-width track rather than drawn to true scale - a 20,000ft overshoot
+// and a 200ft overshoot both need to render as *some* visible offset, not
+// one dot pinned uselessly at the edge and the other invisible on top of
+// the target tick.
+function linearBarSvg({target, actual, status, unit, tol, actualLabel='actual'}){
+  const color = status==='bad' ? 'var(--red)' : status==='warn' ? 'var(--amber)' : 'var(--green)';
+  const w=150, pad=8, trackY=14;
+  const cx = w/2;
+  const diff = actual - target;
+  const range = Math.max(Math.abs(diff)*1.2, (tol||1)*4, 1);
+  const scale = (w/2 - pad) / range;
+  const ax = Math.max(pad, Math.min(w-pad, cx + diff*scale));
+  const tolPx = tol ? Math.min(w/2-pad, tol*scale) : 0;
+  const fmt = n => Math.round(n).toLocaleString();
+  return `<div class="mini-diagram">
+    <svg width="${w}" height="${trackY+8}" viewBox="0 0 ${w} ${trackY+8}">
+      <line x1="${pad}" y1="${trackY}" x2="${w-pad}" y2="${trackY}" stroke="var(--line)" stroke-width="1.5"/>
+      ${tolPx ? `<rect x="${(cx-tolPx).toFixed(1)}" y="${trackY-4}" width="${(tolPx*2).toFixed(1)}" height="8" fill="var(--green-dim)" opacity="0.4"/>` : ''}
+      <line x1="${cx}" y1="${trackY-7}" x2="${cx}" y2="${trackY+7}" stroke="var(--magenta)" stroke-width="2" stroke-dasharray="3,2"/>
+      <circle cx="${ax.toFixed(1)}" cy="${trackY}" r="4" fill="${color}"/>
+    </svg>
+    <div class="mini-diagram-legend">
+      <span style="color:var(--magenta)">┄ assigned ${fmt(target)}${unit}</span>
+      <span style="color:${color}">● ${actualLabel} ${fmt(actual)}${unit}</span>
     </div>
   </div>`;
 }
@@ -2634,7 +2731,18 @@ function renderStrip(ex){
   const overall = ex.eval.overall;
   const cls = overall==='ok'?'status-ok':overall==='warn'?'status-warn':overall==='bad'?'status-bad':'';
   const badges = ex.eval.results.map(r=>`<span class="badge ${r.status}">${statusIcon(r.status)} ${r.label}</span>`).join('');
-  const hdgResult = ex.eval.results.find(r=>r.type==='HDG' && r.diagram);
+  // Every result carrying diagram data gets its assigned-vs-actual visual -
+  // HDG renders as a compass, ALT/SPD as a linear bar (see headingCompassSvg/
+  // linearBarSvg). A single exchange can carry more than one diagram-bearing
+  // result (e.g. SPD's flat 250kt-below-10k and approach-speed-target checks
+  // can both fire on the same exchange), so this renders all of them, not
+  // just the first.
+  const diagramsHtml = ex.eval.results.filter(r=>r.diagram).map(r=>{
+    if(r.type==='HDG') return headingCompassSvg(r.diagram);
+    if(r.type==='ALT') return linearBarSvg({...r.diagram, unit:'ft'});
+    if(r.type==='SPD') return linearBarSvg({...r.diagram, unit:'kt'});
+    return '';
+  }).join('');
   const t = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : '—';
 
   const div = document.createElement('div');
@@ -2662,7 +2770,7 @@ function renderStrip(ex){
         // evaluateExchange never flags it at all).
         (ex.hasTarget ? `<div class="readback" style="color:var(--red)">No readback captured</div>` : `<div class="readback" style="color:var(--text-dimmer)">No readback captured (none expected)</div>`))}
       ${ex.atc.rawVoice ? `<div class="rawvoice">🔊 "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
-      ${hdgResult ? headingCompassSvg(hdgResult.diagram) : ''}
+      ${diagramsHtml}
       <div class="detail-grid">
         <div class="detail-col">
           <h4>Aircraft state at instruction</h4>

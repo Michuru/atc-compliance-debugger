@@ -4,6 +4,15 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.3.0] - 2026-08-19
+
+### Added
+- Assigned-vs-actual mini diagrams in each instruction's detail view - a compass for heading, a new linear bar for altitude/speed - now shown for a clearance still correctly in progress when a later instruction took over ("new instructions given before arriving"), not just a genuine final miss. Previously only heading's final-miss case had this visual at all; altitude and speed had none.
+
+### Fixed
+- Piper M600 was missing from the aircraft-category table entirely, silently falling back to flat, untuned thresholds. Added using real POH data (Vref 85kt / Vso 62kt → Category A).
+- Speaker detection: two more real player-voice patterns were misread as ATC speech. A real player voice-transcription line could be misattributed back to ATC if it happened to open with the callsign (no comma) the way a real ATC instruction does. An arrival check-in on a new frequency with an aircraft-type clause between the facility/callsign and the content ("Scottsdale Tower, N39NG, Piper M600, inbound for landing, with information Q.") matched neither existing check-in pattern. Both had been producing phantom no-content "ATC instruction" cards in the exchange list, obscuring the pilot's own actual radio calls.
+
 ## [1.2.1] - 2026-08-18
 
 ### Fixed
