@@ -4,6 +4,14 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.4.0] - 2026-08-22
+
+### Added
+- Every pilot line - readback or self-report - is now labeled **Pilot (human)** or **Co-Pilot (AI)**, distinguishing BeyondATC's real push-to-talk speech-to-text pipeline from its own synthesized/text-based readbacks and canned button-triggered reports. Both were already tracked internally; neither was ever surfaced before now.
+
+### Fixed
+- The pilot's readback (or its absence) required expanding an instruction's card to see at all - including its own timestamp, needed to visually compare against the instruction time for a "Readback delayed" finding. Now shown inline on the card itself; only the raw voice line, diagrams, and state grid still require expanding.
+
 ## [1.3.1] - 2026-08-22
 
 ### Fixed

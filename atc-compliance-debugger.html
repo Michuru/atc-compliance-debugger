@@ -991,6 +991,15 @@ function fmtTime(min){
   const h = Math.floor(min/60)%24, m = min%60;
   return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
 }
+// Distinguishes the real player's own push-to-talk (speechTranscription:true,
+// set in parseLegLines from the [Speech Transcription] AI Processed pipeline
+// - see that pipeline's own module-level comment) from BeyondATC's
+// synthesized/text-based readback spoken on the pilot's behalf ([LocalVoiceInput]/
+// [Instruction], including [PlayerAction]-triggered canned reports) - both
+// render as speaker:'PILOT' with no other field distinguishing them until now.
+function pilotLabel(ev){
+  return ev && ev.speechTranscription ? 'Pilot (human)' : 'Co-Pilot (AI)';
+}
 function headingDiff(a,b){
   let d = Math.abs(a-b)%360;
   return d>180 ? 360-d : d;
@@ -2825,33 +2834,25 @@ function renderStrip(ex){
     <div class="strip-head">
       <div class="strip-time">${t}</div>
       <div class="strip-main">
-        <div class="strip-instr"><span class="who">${ex.atc.speaker==='PILOT' ? 'Pilot' : 'ATC'}</span>${escapeHtml(ex.atc.text)}</div>
+        <div class="strip-instr"><span class="who">${ex.atc.speaker==='PILOT' ? pilotLabel(ex.atc) : 'ATC'}</span>${escapeHtml(ex.atc.text)}</div>
         ${badges ? `<div class="strip-badges">${badges}</div>` : ''}
+        <!-- Moved out of the click-to-expand detail panel (2026-08-22) - the
+             pilot's readback, including its own timestamp for at-a-glance
+             delay comparison against the ATC time above, was the single
+             biggest "hidden" complaint about this view: a real readback-delay
+             log was unreadable at a glance even after the RESP badge label
+             gained both clock times, because the actual readback text/time
+             still required clicking every card open. Same conditional logic
+             as before (readback text+time / red "none captured" when a
+             readback was expected / dimmed "none expected" otherwise, still
+             suppressed entirely for isPilotReport self-reports) - only its
+             location moved, not what it shows or when. -->
+        ${ex.readback ? `<div class="readback"><span class="who">${pilotLabel(ex.readback)}</span>${ex.readback.state ? `<span class="rb-time">${fmtTime(ex.readback.state.timeMin)}</span>` : ''}${escapeHtml(ex.readback.text)}</div>` : (ex.isPilotReport ? '' :
+          (ex.hasTarget ? `<div class="readback" style="color:var(--red)">No readback captured</div>` : `<div class="readback" style="color:var(--text-dimmer)">No readback captured (none expected)</div>`))}
       </div>
       <div class="strip-chevron">▶</div>
     </div>
     <div class="strip-detail">
-      <!-- The readback line previously showed only its text, with the strip
-           header above showing only the ATC instruction's own time - so a
-           "Readback delayed ~Xm" badge (see evaluateExchange's RESP check,
-           now also showing both clock times directly in its own label) had
-           no visible readback timestamp anywhere to manually cross-check
-           against the raw log's [PlayerState] clock. Pure additive display:
-           shows ex.readback.state's own HH:MM next to "Pilot", same fmtTime
-           format as everywhere else in this file - doesn't change what
-           counts as delayed or missing. -->
-      ${ex.readback ? `<div class="readback"><span class="who">Pilot</span>${ex.readback.state ? `<span class="rb-time">${fmtTime(ex.readback.state.timeMin)}</span>` : ''}${escapeHtml(ex.readback.text)}</div>` : (ex.isPilotReport ? '' :
-        // Red only when a readback was actually expected - matching the
-        // exact same ex.hasTarget condition the RESP check itself uses
-        // (evaluateExchange's `!ex.readback && ex.hasTarget` branch). This
-        // detail view previously showed red unconditionally whenever
-        // ex.readback was null, regardless of hasTarget - misleadingly
-        // flagging plain acknowledgments/frequency changes ("readback
-        // correct, contact ground...") in the same alarming color as a
-        // genuine missing-readback violation, even though no RESP badge
-        // ever appeared for them in the summary (hasTarget is false, so
-        // evaluateExchange never flags it at all).
-        (ex.hasTarget ? `<div class="readback" style="color:var(--red)">No readback captured</div>` : `<div class="readback" style="color:var(--text-dimmer)">No readback captured (none expected)</div>`))}
       ${ex.atc.rawVoice ? `<div class="rawvoice">🔊 "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
       ${diagramsHtml}
       <div class="detail-grid">
