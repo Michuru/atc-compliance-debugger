@@ -4,6 +4,13 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.3.1] - 2026-08-22
+
+### Fixed
+- Go-around reports (e.g. "American 1883, going around.") were correctly speaker-tagged as pilot speech but never rendered as a timeline entry at all - silently dropped, leaving no visible reason why the vectors right after it looked like a second approach attempt. Now shown as an informational entry ("Player announced going around") with no compliance judgment attached - a go-around is the pilot's own unilateral safety decision, with no ATC-issued target to check it against.
+- "Readback delayed ~Xm" gave no way to check the finding against the raw log's own clock without doing the subtraction by hand. The label now also states the instruction and readback HH:MM times directly, and the readback line in each instruction's detail view now shows its own timestamp.
+- A fourth real "request" false positive: BeyondATC's own canned confirmation ("...roger, altitude change request cancelled.") was misread as a pilot-initiated request and misclassified as pilot speech - same underlying pattern as the three exclusions already fixed in v1.1.0/v1.2.0.
+
 ## [1.3.0] - 2026-08-19
 
 ### Added

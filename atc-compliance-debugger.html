@@ -210,6 +210,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .kv b{color:var(--text);font-weight:500;}
 .readback{color:var(--text-dim);font-style:italic;font-size:12.5px;margin-top:6px;}
 .readback .who{color:var(--text-dimmer);font-style:normal;font-size:10px;text-transform:uppercase;margin-right:6px;}
+.readback .rb-time{color:var(--text-dimmer);font-style:normal;font-size:10px;margin-right:6px;}
 .rawvoice{background:var(--panel-2);border-radius:6px;padding:8px 10px;color:var(--text-dimmer);font-size:11.5px;margin-top:10px;}
 .mini-diagram{display:flex;align-items:center;gap:12px;background:var(--panel-2);border-radius:6px;padding:8px 10px;margin-top:10px;}
 .mini-diagram-legend{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--text-dim);}
@@ -396,7 +397,18 @@ const RE_PILOT_REQUEST = /\brequest(?:ing|ed)?\b/i;
 // [Instruction] line containing "request" before adding this exclusion:
 // these three phrasings never appear in genuine pilot speech anywhere in
 // the library, only in these ATC lines.
-const RE_ATC_REQUEST_ECHO = /\bsay request\b|\bas requested\b|\bmake a\s+\S+\s+request\b/i;
+// Fourth instance, found 2026-08-22 via a user-reported readback-timing
+// log: BeyondATC's own canned confirmation after a pilot cancels a pending
+// request - "Gray Bird 343, roger, altitude change request cancelled." /
+// "American 1883, roger, altitude change request cancelled." - the same
+// template phrase verbatim in two independent real logs (one already in
+// this library, one newly reported), zero counterexamples found. "request"
+// here is again a noun object of BeyondATC's own confirmation, not the
+// pilot's verb - the identical false-positive shape as the three
+// exclusions above, just a fourth real phrasing of it. Matches both
+// "cancelled"/"canceled" spellings since nothing in this file's own
+// vocabulary pins one down.
+const RE_ATC_REQUEST_ECHO = /\bsay request\b|\bas requested\b|\bmake a\s+\S+\s+request\b|\brequest\s+cancell?ed\b/i;
 // Same misclassification once more, for a go-around: the player's own
 // report ("Gray Bird 343, going around.") leads with the callsign just
 // like the cases above, breaking the same callsign-position heuristic.
@@ -920,6 +932,49 @@ function buildExchanges(parsed){
       reportWindowEndLineIndex: boundaryLineIndex
     });
   });
+
+  // Player go-around reports ("American 1883, going around.") hit the same
+  // RE_PILOT_GOAROUND check in parseLegLines that corrects their SPEAKER
+  // attribution (see that regex's own comment: this phrasing leads with the
+  // callsign just like the readyForDescent/request cases above, breaking
+  // the normal ATC-leads/pilot-signs-off-with-callsign position heuristic).
+  // But fixing the speaker tag alone was never enough to make the report
+  // itself VISIBLE - only ATC-speaker events become exchanges via atcEvents
+  // above, and the only existing self-report carve-out (readyForDescent,
+  // right above) matches specifically on "ready for descent/departure"
+  // text, not on a go-around. A go-around report matched neither: it got
+  // speaker-tagged PILOT correctly, then fell on the floor - never reaching
+  // EXCHANGES, so it never rendered anywhere in the tool's output at all.
+  // Found against a real log where the player genuinely went around
+  // (BeyondATC's own follow-on missed-approach vectors parsed and graded
+  // normally on the exchanges that DID make it through) - the go-around
+  // call itself, the one moment that explains why everything after it looks
+  // like a fresh approach attempt, was completely absent from the timeline.
+  // Given its own entry the same way readyForDescent gets one. Unlike
+  // readyForDescent, a go-around is a unilateral pilot safety action with
+  // no "authorization" to check compliance against - there's no clearance
+  // it jumped ahead of - so this deliberately stays purely informational
+  // (type INFO, status ok, no diagram) rather than inventing an unverified
+  // judgment call (e.g. "did the aircraft actually climb away") with no
+  // real-log evidence behind it yet. Revisit with an actual compliance
+  // check only if a real log surfaces a concrete miscompliant example.
+  events.filter(e => e.speaker==='PILOT' && RE_PILOT_GOAROUND.test(e.text))
+    .forEach(reportEvent => {
+      exchanges.push({
+        id: null, // reassigned below once the merged array is in final chronological order
+        lineIndex: reportEvent.lineIndex,
+        atc: reportEvent, // same {lineIndex,text,rawVoice,sid,speaker,state} shape renderStrip already expects
+        readback: null,
+        clearance: { altitude:null, heading:null, speed:null, approach:null, landing:null, cancel:{heading:false,altitude:false} },
+        hasTarget: false,
+        windowStates: [], altWindowStates: [], hdgWindowStates: [],
+        altSuperseded:false, altSupersededBy:null, altSupersededByIdx:null,
+        hdgSuperseded:false, hdgSupersededBy:null, hdgSupersededByIdx:null,
+        isLast:false,
+        isPilotReport: true,
+        reportKind: 'goAround'
+      });
+    });
 
   // Re-sort chronologically (player-report entries were appended after the
   // atcEvents loop above) and reassign `id` to match final array position -
@@ -1735,7 +1790,17 @@ function evaluateExchange(ex, cfg){
   if(ex.readback && ex.readback.state && startState){
     const d = ex.readback.state.timeMin - startState.timeMin;
     if(d > cfg.responseDelayMax){
-      results.push({type:'RESP', status:'warn', label:`Readback delayed ~${d}m`});
+      // Real user complaint: "~Xm" alone gives no way to cross-check this
+      // against the raw log's own [PlayerState] clock times without doing
+      // delta math blind - PlayerState only carries HH:MM (no seconds), so
+      // fmtTime's same HH:MM format used everywhere else in this file (the
+      // strip header's own instruction time, renderStateKV's "Time" row)
+      // is exactly what a manual verification pass would be comparing
+      // against anyway. Pure label text, same pattern as the 2026-08-08/
+      // 2026-08-10 wording passes elsewhere in this file - doesn't touch
+      // the >cfg.responseDelayMax branch condition or `d`'s computation, so
+      // no existing warn/ok tally can shift.
+      results.push({type:'RESP', status:'warn', label:`Readback delayed ~${d}m (instruction ${fmtTime(startState.timeMin)} → readback ${fmtTime(ex.readback.state.timeMin)})`});
     }
   } else if(!ex.readback && ex.hasTarget){
     results.push({type:'RESP', status:'warn', label:`No readback captured`});
@@ -1765,6 +1830,15 @@ function evaluateExchange(ex, cfg){
 // clearance is elsewhere (there's no clearance here to be superseded by -
 // the whole point is that none was ever issued).
 function evaluatePilotReport(ex, cfg){
+  // Go-around reports (reportKind: 'goAround', see buildExchanges) get no
+  // compliance judgment - see that block's own comment on why a unilateral
+  // pilot safety action has no "authorization" to check against. This
+  // branch exists purely so the report shows up in the timeline at all
+  // (previously invisible), tagged INFO/ok so it doesn't skew the ALT/HDG/
+  // SPD/RESP filter counts or the flagged-only view.
+  if(ex.reportKind === 'goAround'){
+    return { results: [{type:'INFO', status:'ok', label:'Player announced going around'}], overall:'ok' };
+  }
   const startAlt = ex.atc.state ? ex.atc.state.alt : null;
   if(startAlt==null || !ex.windowStates.length){
     return { results: [{type:'ALT', status:'ok', label:'Reported ready for descent — no further data to confirm or rule out an early descent'}], overall:'ok' };
@@ -2757,7 +2831,16 @@ function renderStrip(ex){
       <div class="strip-chevron">▶</div>
     </div>
     <div class="strip-detail">
-      ${ex.readback ? `<div class="readback"><span class="who">Pilot</span>${escapeHtml(ex.readback.text)}</div>` : (ex.isPilotReport ? '' :
+      <!-- The readback line previously showed only its text, with the strip
+           header above showing only the ATC instruction's own time - so a
+           "Readback delayed ~Xm" badge (see evaluateExchange's RESP check,
+           now also showing both clock times directly in its own label) had
+           no visible readback timestamp anywhere to manually cross-check
+           against the raw log's [PlayerState] clock. Pure additive display:
+           shows ex.readback.state's own HH:MM next to "Pilot", same fmtTime
+           format as everywhere else in this file - doesn't change what
+           counts as delayed or missing. -->
+      ${ex.readback ? `<div class="readback"><span class="who">Pilot</span>${ex.readback.state ? `<span class="rb-time">${fmtTime(ex.readback.state.timeMin)}</span>` : ''}${escapeHtml(ex.readback.text)}</div>` : (ex.isPilotReport ? '' :
         // Red only when a readback was actually expected - matching the
         // exact same ex.hasTarget condition the RESP check itself uses
         // (evaluateExchange's `!ex.readback && ex.hasTarget` branch). This
