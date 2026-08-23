@@ -4,6 +4,12 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.4.1] - 2026-08-22
+
+### Fixed
+- Callsign detection: the frequency-guess fallback regex only matched Title-case callsigns ("Speedbird 1"), so an ALL-CAPS callsign ("LEIPZIGAIR 324") lost to an unrelated taxi holding point mentioned elsewhere in the log, silently dropping a real ATC heading-vector instruction from the exchange list entirely.
+- Heading: a vector heading assigned in the same instruction as an approach clearance (e.g. "turn right, heading 230, ..., cleared ILS approach runway 26L") had no equivalent to altitude's "maintain X until established" carve-out, so a textbook-correct ILS intercept graded as a hard violation once the aircraft continued turning past the vector heading onto the actual final approach course. Bounded to a generous tolerance, not a blanket skip, so a genuine large mismatch (e.g. a re-vector after flying through the final course) still gets flagged.
+
 ## [1.4.0] - 2026-08-22
 
 ### Added

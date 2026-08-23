@@ -1136,6 +1136,29 @@ function evaluateExchange(ex, cfg){
   // ---- HEADING ----
   if(ex.clearance.heading){
     const target = ex.clearance.heading.targetHdg;
+    // Same instruction also clears the approach ("turn right, heading 230,
+    // ..., cleared ILS approach runway 26L") - the vector is a means to
+    // intercept the final course, not a heading to hold, so ending up
+    // somewhere else close to it once established is the expected outcome
+    // of flying the approach, not a deviation. This tool has no
+    // ILS/localizer-course database to check the REAL target (the runway's
+    // final approach course) against, so - same honesty pattern as ALT's
+    // viaProcedure/pointRestriction branches - forgive a mismatch within
+    // cfg.vectorReleaseTol instead of grading the eventual heading against
+    // a vector number that was never meant to be held. Bounded (not a
+    // blanket skip) so a genuinely large mismatch still gets flagged -
+    // confirmed necessary against `2026-08-03(EIDW-EGNT).log`'s Ryanair
+    // 15XV: "turn right, heading 230, ... cleared ILS approach runway 07"
+    // ended up 160° off (70° actual) after BeyondATC's own dialogue said
+    // the aircraft had flown through the final approach course and was
+    // being re-vectored - a real anomaly this must NOT silently swallow.
+    // Fixed after two real false positives from the narrower case: `Player
+    // - unable to tell if he was on the approach path.log` (EDDM 26L, 32°
+    // off - the log this fix was built to resolve) and `Player - ATC
+    // forgot me.log` (N452DA/KYQD 27, 13° off) both graded 'bad' on a
+    // heading that was, per the plate/expected ILS geometry, correctly
+    // established on final.
+    const releasedByApproach = !!ex.clearance.approach;
     // "Leave (FIX) heading (XXX)" doesn't take effect until the aircraft
     // actually leaves the named fix (see parseHeadingClearance) - anchor
     // timing there instead of the instant of the radio call, same pattern
@@ -1198,8 +1221,12 @@ function evaluateExchange(ex, cfg){
       }
       if(worstDrift){
         const driftDiff = Math.round(headingDiff(worstDrift.hdg, target));
-        const status = driftDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
-        results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
+        if(releasedByApproach && driftDiff <= cfg.vectorReleaseTol){
+          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then continued turning to ${Math.round(worstDrift.hdg)}° — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
+        } else {
+          const status = driftDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
+          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
+        }
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
         // this is a completed, already-observed turn - "HDG 60 in ~2m"
@@ -1260,6 +1287,28 @@ function evaluateExchange(ex, cfg){
         const sustainedNonProgress = !hdgTriggerPending && spreadWin.length >= 2 && hdgSpread <= cfg.hdgTol;
         const actual = Math.round(finalState.hdg);
         const diff = Math.round(finalDiff);
+        // Also require real evidence the aircraft actually turned since the
+        // clearance, not just that it ended up within vectorReleaseTol of
+        // the vector - otherwise a heading held flat at its PRE-clearance
+        // value (the AAL3264 "never responded" pattern sustainedNonProgress
+        // exists to catch, just below) that happens to already sit within
+        // range would read as "likely capturing the final approach course"
+        // with zero evidence a turn was ever attempted.
+        // !sustainedNonProgress is the WRONG check for this, though - a
+        // correctly captured ILS final course is BY DEFINITION flat/settled
+        // (that's what "established" means), so sustainedNonProgress fires
+        // on the exact case this carve-out exists for just as readily as on
+        // a real stall (confirmed: gating on it flipped `Player - unable to
+        // tell if he was on the approach path.log`'s EDDM 230° case - this
+        // fix's own motivating log - straight back to 'bad'). The real
+        // question is whether the aircraft moved OFF its pre-clearance
+        // heading at all, which sustainedNonProgress doesn't measure (it
+        // only measures the window's own internal spread, not spread
+        // relative to hdgProgressStart).
+        const turnedMeaningfully = hdgProgressStart && headingDiff(hdgProgressStart.hdg, actual) > cfg.hdgTol;
+        if(releasedByApproach && diff <= cfg.vectorReleaseTol && turnedMeaningfully){
+          results.push({type:'HDG', status:'ok', label:`Assigned ${target}° — cleared for the approach in the same instruction, ended up at ${actual}° (${diff}° off the vector) — likely capturing the final approach course, not independently verified from available states`, diagram:{target, actual, status:'ok'}});
+        } else {
         const status = ex.hdgSuperseded
           ? (sustainedNonProgress ? 'bad' : 'warn')
           : (finalDiff <= cfg.hdgTol*2 ? 'warn' : 'bad');
@@ -1269,6 +1318,7 @@ function evaluateExchange(ex, cfg){
         // visual rendered in the strip detail view (renderStrip/
         // headingCompassBlock).
         results.push({type:'HDG', status, label:`Assigned ${target}° — current heading ${actual}° instead, ${diff}° off`, diagram:{target, actual, status}});
+        }
       }
     } else {
       results.push({type:'HDG', status:'warn', label:`HDG ${target} — no data`});
@@ -1945,7 +1995,19 @@ const DEFAULT_CFG = {
   // pilot compliance-timing standard, so this stays a judgment call (same
   // status as hdgTol above, now confirmed rather than unexamined).
   responseDelayMax: {v:3, label:'Slow response threshold', unit:'min'},
-  altMinRate: {v:500, label:'Min. expected climb/descent rate', unit:'fpm'}
+  altMinRate: {v:500, label:'Min. expected climb/descent rate', unit:'fpm'},
+  // A vector heading assigned in the SAME instruction as an approach
+  // clearance ("turn right heading 230, ... cleared ILS approach runway
+  // 26L") is a heading to intercept the final course with, not one to
+  // hold - normal ILS/visual vectoring expects the aircraft to keep
+  // turning past it once established. No hard FAA numeric cap exists for
+  // how far a vector angle may sit from the final course, so this is a
+  // judgment call, not a citation - chosen generously wide (a real
+  // published vector-to-intercept angle is typically well under this) so
+  // it only forgives genuine localizer/course capture, not a materially
+  // different outcome (see the Ryanair 15XV 160°-off case this deliberately
+  // does NOT cover, immediately below).
+  vectorReleaseTol: {v:90, label:'Vector-release angle (cleared for the approach)', unit:'°'}
 };
 
 // FAA Pilot/Controller Glossary AIRCRAFT APPROACH CATEGORY bands (based on
@@ -2311,10 +2373,35 @@ function guessCallsign(events, callsignHints){
   // flights whose spoken form differs from the logged callsign (e.g. BAW1
   // -> "Speedbird 1"). Allows an optional trailing letter suffix (Ryanair
   // 15XV, Easy 19YD) since those also don't match a bare tail number.
+  // First letter must be capital, but the rest of the word can be any case
+  // ([A-Za-z]*, not [a-z]+) - some BeyondATC logs spell the airline name in
+  // full caps ("LEIPZIGAIR 324" rather than "Leipzigair 324"). The
+  // lowercase-only version silently excluded these from the candidate pool
+  // entirely, so the fallback picked whatever properly-cased phrase repeated
+  // most instead (a taxi holding point mentioned 3 times beat the real,
+  // 90+-times-repeated callsign) - confirmed via `Player - unable to tell if
+  // he was on the approach path.log` (LEIPZIGAIR 324/EDDM), where the wrong
+  // guess ("Mike 9") then broke refineSpeakersByCallsign's callsign-position
+  // check for one instruction, silently dropping a real ATC heading vector
+  // from the exchange list entirely.
   const freq = {};
   events.forEach(e=>{
-    const matches = e.text.match(/\b[A-Z][a-z]+ \d{1,5}[A-Z]{0,3}(?: Heavy)?\b/g);
-    if(matches) matches.forEach(m=>{ freq[m]=(freq[m]||0)+1; });
+    const matches = e.text.match(/\b[A-Z][A-Za-z]* \d{1,5}[A-Z]{0,3}(?: Heavy)?\b/g);
+    if(matches) matches.forEach(m=>{
+      // Allowing ALL-CAPS words above (not just Title-case) also widened
+      // the match to real aviation jargon that isn't a callsign but shares
+      // the same "Word ####" shape - "ILS 26L", "QNH 1011", "NAV 19",
+      // "VOR 253" - confirmed present (unmatched pre-fix) across the real
+      // sample library. None of these ever won the frequency count in any
+      // real log checked (the Player Callsign hint above wins first
+      // whenever one exists), but a log with heavy such phrasing AND no
+      // working hint match - exactly the scenario this fix targets - could
+      // resurrect the same wrong-guess failure mode in a different shape.
+      // Excluded defensively; none of these words are ever a real
+      // airline/tail callsign.
+      if(/^(ILS|NAV|RNAV|QNH|VOR|ROMEO)\b/i.test(m)) return;
+      freq[m]=(freq[m]||0)+1;
+    });
   });
   let best=null,bestN=0;
   for(const k in freq) if(freq[k]>bestN){best=k;bestN=freq[k];}
