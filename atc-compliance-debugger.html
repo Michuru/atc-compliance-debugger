@@ -241,6 +241,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
         <div class="callsign" id="hCallsign">&mdash;</div>
         <div class="route" id="hRoute">&mdash;</div>
         <div class="route-actions" id="hRouteActions" style="display:none;"></div>
+        <div class="cat-note-inline" id="hProcedures" style="display:none;"></div>
         <div class="cat-note-inline" id="hCatNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
@@ -309,6 +310,98 @@ const RE_PLAYER_CALLSIGN = /Player Callsign:\s*(\S+)/;
 // flight-info block regardless of SimBrief use, so it's read as the
 // primary source now.
 const RE_AIRCRAFT_TYPE = /Aircraft Type:\s*(\S+)/;
+// BeyondATC's engine logs one of these lines whenever it computes a SID/STAR
+// for an aircraft - see parseLegLines' RE_PROCEDURES branch and
+// deriveAssignedProcedures() for how this gets attributed to the player
+// specifically rather than background AI traffic.
+// The transition name is sometimes blank in real logs ("for transition  using
+// runway 24", confirmed against `Player (8).log`/`Player - ATC forgot me.log` -
+// an untransitioned/vectored departure, not a corrupted line) - the transition
+// group must allow zero characters or the whole line, SID name included,
+// silently fails to match and the candidate is never collected at all.
+const RE_PROCEDURES = /\[Procedures\]\s+(SID|STAR)\s+is\s+([\w-]+)\s+for\s+transition\s+([\w-]*)\s+using\s+runway\s+(\w+)/i;
+// BeyondATC logs this when its engine finds no charted SID/STAR at all for an
+// aircraft (as opposed to RE_PROCEDURES above, which fires once it HAS
+// computed one) - the callsign is embedded directly in the line itself, unlike
+// RE_PROCEDURES' candidates which need the nearby-line correlation below.
+// Confirmed real for STAR (15 occurrences across the sample logs, all
+// background traffic); no "No SID available" example has been seen yet, so
+// that half is supported for symmetry but unverified - see
+// Design Docs/planned-vs-actual-procedures.md.
+const RE_NO_PROCEDURE = /\[Procedures\]\s+No\s+(SID|STAR)\s+available\s*\|\s*airport=\S+\s*\|\s*runway=(\S+)\s*\|\s*callsign=(\S+)\s*\|\s*aircraft will be vectored/i;
+// The log's own flight-info header states the filed plan explicitly - far
+// more reliable than guessing from route= token shape. The SID:/SID Trans:/
+// STAR:/STAR Trans: lines only appear when their "Plan has X" sibling is
+// True; ^-anchored so "SID:" and "SID Trans:" can't cross-match each other.
+// Confirmed the SimBrief URL's origrwy/destrwy params are NOT reliably "the
+// plan" (they track BeyondATC's own current/engine-picked runway instead,
+// which can disagree with what was actually filed) - these two lines are the
+// real planned-runway source. See Design Docs/planned-vs-actual-procedures.md.
+const RE_PLAN_HAS_SID = /Plan has SID:\s*(True|False)/i;
+const RE_PLAN_HAS_STAR = /Plan has STAR:\s*(True|False)/i;
+const RE_PLANNED_SID = /^SID:\s*(\S+)/;
+const RE_PLANNED_SID_TRANS = /^SID Trans:\s*(\S*)/;
+const RE_PLANNED_STAR = /^STAR:\s*(\S+)/;
+const RE_PLANNED_STAR_TRANS = /^STAR Trans:\s*(\S*)/;
+const RE_PLANNED_DEP_RWY = /^SimBrief Planned Departure Runway:\s*(\S+)/;
+const RE_PLANNED_ARR_RWY = /^SimBrief Planned Arrival Runway:\s*(\S+)/;
+// A callsign-shaped token on a nearby line, used to attribute an otherwise
+// anonymous [Procedures] line to a specific aircraft. Deliberately restricted
+// to specific tag types confirmed to actually correlate with a nearby
+// [Procedures] line ([RunwaySelect]/[RunwayAlloc]/[VectorGen]/
+// [ILSVectorCalc]/[VoiceAssign]) rather than matching a bare `callsign=`/
+// `aircraft=` field anywhere in the line - other tag types reuse the same
+// field name for unrelated per-aircraft telemetry with no correlation to
+// procedure computation at all. Confirmed real false positive from the
+// permissive version: widening the search window (see collectProcedureCandidates)
+// to reach a real correlated case picked up an incidental
+// `[PathRebuild] callsign=N452DA|mode=keep-waypoints|...` line - an
+// unrelated flight-path-correction diagnostic - sitting near a completely
+// different aircraft's STAR for a different airport, in
+// `Player - ATC forgot me.log`. N452DA's own real destination (CYJT, from
+// its SimBrief URL) confirmed that STAR (CYYZ, a different airport) could
+// not have been its own.
+// "strong" (VectorGen/ILSVectorCalc/VoiceAssign) lines carry an explicit
+// callsign=/aircraft= field written specifically for that nearby [Procedures]
+// line - a direct correlation. "weak" (RunwaySelect/RunwayAlloc) lines are
+// positional only: they just happen to be near the [Procedures] line, with no
+// field actually tying the two together. This distinction matters because
+// BeyondATC's engine re-logs the identical [Procedures] SID/STAR computation
+// for the SAME background aircraft many times over the course of a flight
+// (446 STAR candidates confirmed in one real log) - most instances have a
+// strong tag nearby, but a rare instance can have none, leaving only an
+// incidental weak match to a completely different (usually the player's own)
+// aircraft's own routine runway-allocation line. Confirmed real:
+// `Player - Not yet finished log example of a SID that changed to
+// vectors.log` - a `[Procedures] STAR is SERFR4 ... using runway 28L` (a real
+// SFO-bound background aircraft's arrival) had no VectorGen/VoiceAssign tag
+// within range, but sat a few lines after the player's own unrelated
+// `[RunwayAlloc] FDX411 planned=30...` (their OWN departure runway, nothing
+// to do with this STAR) - `deriveAssignedProcedures`'s "last match wins"
+// picked this weak, coincidental match over the correctly strong-tagged
+// `YUTES2` STAR actually computed for the player earlier in the same log.
+// See Design Docs/planned-vs-actual-procedures.md's implementation notes.
+function extractCallsignToken(line){
+  let m = line.match(/^\[(?:VectorGen|ILSVectorCalc)\]\s+callsign=([^\s|]+)/);
+  if(m) return { token:m[1], strong:true };
+  m = line.match(/^\[VoiceAssign\]\s+aircraft=([^\s|]+)/);
+  if(m) return { token:m[1], strong:true };
+  // Logged when BeyondATC's engine reassigns an aircraft's arrival runway
+  // mid-flight (e.g. a weather-driven runway change) and immediately
+  // followed by a re-logged [Procedures] STAR line reflecting the new
+  // runway - the callsign is embedded directly, same reliability tier as
+  // VectorGen/VoiceAssign. Confirmed real and necessary: without this, the
+  // re-logged STAR candidate carrying the TRUE final runway has no
+  // correlation tag nearby at all (weak or strong) and is silently never
+  // attributed to the player, leaving the Arrival line stuck showing the
+  // stale pre-change runway even after a confirmed real reassignment -
+  // found during code review of Design Docs/planned-vs-actual-procedures.md.
+  m = line.match(/^\[Arrival Runway Update\]\s+(\S+)\s+from/i);
+  if(m) return { token:m[1], strong:true };
+  m = line.match(/^\[Runway(?:Select|Alloc)\]\s+(\S+)/);
+  if(m) return { token:m[1], strong:false };
+  return null;
+}
 // Real (push-to-talk) pilot speech goes through a separate speech-to-text
 // pipeline instead of the [LocalVoiceInput]/[Instruction] pair used for
 // synthesized ATC voice and text-based readbacks. The "AI Processed" line
@@ -440,6 +533,56 @@ function findLegBoundaries(lines){
   return bounds.length ? bounds : [0];
 }
 
+// BeyondATC logs a `[Procedures] SID/STAR is ...` line whenever its engine
+// computes a departure/arrival procedure for ANY aircraft it's tracking -
+// player and background AI traffic alike - with no callsign on the line
+// itself. Attribution comes from a nearby raw line (within a couple lines
+// either side) that does carry one - confirmed against real logs:
+// `[RunwaySelect]`/`[RunwayAlloc] <callsign> ...` often precedes it,
+// `[VectorGen] callsign=<callsign>|...`/`[ILSVectorCalc] callsign=<callsign>|...`
+// often follows.
+//
+// Scanned over the WHOLE file, not per-leg (unlike every other meta field
+// parseLegLines collects) - confirmed against real logs that the initial
+// SID and the flight's first STAR computation are always logged BEFORE that
+// leg's own "Player Callsign:" line prints (i.e. before findLegBoundaries'
+// boundary for that leg even exists), so a per-leg [startIdx,endIdx) scan
+// would silently drop them entirely for every single log, every time - not
+// a rare edge case. deriveAssignedProcedures() (called later, once the
+// player's own callsign is known) does the actual filtering to the player.
+function collectProcedureCandidates(lines){
+  const out = [];
+  for(let i=0;i<lines.length;i++){
+    const m = lines[i].match(RE_PROCEDURES);
+    if(m){
+      // Asymmetric window: up to 6 lines back, 2 forward. Confirmed necessary
+      // against a real case (`Player - ATC forgot me.log`'s leg 2, LXJ569's
+      // own arrival STAR) where the only nearby callsign-bearing line is
+      // `[RunwayAlloc] LXJ569 ...` 5 lines before the `[Procedures]` line,
+      // with nothing at all within 4 lines either side - a narrower window
+      // silently missed it entirely.
+      const nearby = [], nearbyStrong = [];
+      for(let j=Math.max(0,i-6); j<=Math.min(lines.length-1,i+2); j++){
+        if(j===i) continue;
+        const found = extractCallsignToken(lines[j]);
+        if(!found) continue;
+        if(!nearby.includes(found.token)) nearby.push(found.token);
+        if(found.strong && !nearbyStrong.includes(found.token)) nearbyStrong.push(found.token);
+      }
+      out.push({ type: m[1].toUpperCase(), name: m[2], transition: m[3], runway: m[4], lineIndex: i, nearbyCallsigns: nearby, nearbyStrongCallsigns: nearbyStrong });
+      continue;
+    }
+    const noProc = lines[i].match(RE_NO_PROCEDURE);
+    if(noProc){
+      // Callsign is embedded directly in this line - no nearby-line
+      // correlation needed, unlike RE_PROCEDURES above. Maximally reliable
+      // (same tier as a "strong" tag above, not just "nearby").
+      out.push({ type: noProc[1].toUpperCase()==='SID' ? 'NO_SID' : 'NO_STAR', runway: noProc[2], lineIndex: i, nearbyCallsigns: [noProc[3]], nearbyStrongCallsigns: [noProc[3]] });
+    }
+  }
+  return out;
+}
+
 function parseLog(text){
   const lines = text.split(/\r?\n/);
   const bounds = findLegBoundaries(lines);
@@ -447,6 +590,28 @@ function parseLog(text){
     const end = idx+1 < bounds.length ? bounds[idx+1] : lines.length;
     return parseLegLines(lines, start, end);
   });
+  // Attribution prefers real correlation over raw line position: a candidate
+  // goes to whichever leg's OWN playerCallsigns it matches, regardless of
+  // which leg's [start,end) range its lineIndex structurally falls inside.
+  // This matters for a real, confirmed multi-leg case (`Player - ATC forgot
+  // me.log`): leg 2's own arrival STAR is computed a few lines BEFORE leg
+  // 2's "Player Callsign:" line prints, which puts its lineIndex inside leg
+  // 1's raw range - a purely positional assignment (the original
+  // implementation) silently handed it to the wrong leg, and leg 2's own
+  // procedures summary went blank despite the STAR being unambiguously
+  // present and correlatable. Only falls back to position (which leg's
+  // range contains this line, defaulting to leg 0 for anything before the
+  // very first boundary) when NO leg's callsign matches at all - true
+  // background AI traffic, which deriveAssignedProcedures's own per-leg
+  // confirm-or-fallback logic still handles correctly from there.
+  for(const cand of collectProcedureCandidates(lines)){
+    let legIdx = legs.findIndex(leg => cand.nearbyCallsigns.some(t => leg.meta.playerCallsigns.includes(t)));
+    if(legIdx === -1){
+      legIdx = 0;
+      for(let k=0;k<bounds.length;k++){ if(bounds[k] <= cand.lineIndex) legIdx = k; }
+    }
+    legs[legIdx].meta.procedureCandidates.push(cand);
+  }
   return { legs };
 }
 
@@ -454,7 +619,8 @@ function parseLegLines(lines, startIdx, endIdx){
   let lastState = null, lastLVI = null, lastLVILine = -999, lastPlayerActionLine = -999;
   const states = [];       // all PlayerState samples, chronological
   const events = [];       // all Instruction events (ATC or PILOT)
-  let meta = { cruiseAlt:null, orig:null, dest:null, origrwy:null, destrwy:null, actype:null, route:null, simbriefUrl:null, playerCallsigns:[] };
+  let meta = { cruiseAlt:null, orig:null, dest:null, origrwy:null, destrwy:null, actype:null, route:null, simbriefUrl:null, playerCallsigns:[], procedureCandidates:[],
+    planHasSid:null, planHasStar:null, plannedSid:null, plannedSidTrans:null, plannedStar:null, plannedStarTrans:null, plannedDepRwy:null, plannedArrRwy:null };
 
   for(let i=startIdx;i<endIdx;i++){
     const line = lines[i];
@@ -463,6 +629,14 @@ function parseLegLines(lines, startIdx, endIdx){
     if((m = line.match(RE_CRUISE))){ meta.cruiseAlt = parseInt(m[1]); continue; }
     if((m = line.match(RE_PLAYER_CALLSIGN))){ meta.playerCallsigns.push(m[1]); continue; }
     if((m = line.match(RE_AIRCRAFT_TYPE))){ meta.actype = m[1]; continue; }
+    if((m = line.match(RE_PLAN_HAS_SID))){ meta.planHasSid = m[1].toLowerCase()==='true'; continue; }
+    if((m = line.match(RE_PLAN_HAS_STAR))){ meta.planHasStar = m[1].toLowerCase()==='true'; continue; }
+    if((m = line.match(RE_PLANNED_SID_TRANS))){ meta.plannedSidTrans = m[1]; continue; }
+    if((m = line.match(RE_PLANNED_SID))){ meta.plannedSid = m[1]; continue; }
+    if((m = line.match(RE_PLANNED_STAR_TRANS))){ meta.plannedStarTrans = m[1]; continue; }
+    if((m = line.match(RE_PLANNED_STAR))){ meta.plannedStar = m[1]; continue; }
+    if((m = line.match(RE_PLANNED_DEP_RWY))){ meta.plannedDepRwy = m[1]; continue; }
+    if((m = line.match(RE_PLANNED_ARR_RWY))){ meta.plannedArrRwy = m[1]; continue; }
     if((m = line.match(RE_SIMBRIEF))){
       try{
         const u = new URL(m[1]);
@@ -754,6 +928,15 @@ function parseSpeedClearance(text){
 function parseApproachClearance(text){
   let m = text.match(/cleared\s+(the\s+)?([\w\s]+?)\s+approach(?:\s+runway\s*(\w+))?/i);
   if(m) return { kind:m[2].trim(), runway:m[3]||null, raw:m[0] };
+  // Fallback for a clearance phraseology family with no "approach" keyword at
+  // all - "cleared R-NAV-Z 34L" / "cleared R-NAV 35" - confirmed real (see
+  // Design Docs/planned-vs-actual-procedures.md Finding #3). Was previously
+  // invisible not just to this display but to evaluateExchange's ALT/HDG
+  // supersession logic too, so this is a correctness fix, not just a display
+  // one. Only tried once the primary pattern above finds nothing, so every
+  // currently-passing "approach"-keyword case is unaffected.
+  m = text.match(/cleared\s+((?:r[\s-]?nav(?:[\s-]?[a-z])?|ils|visual|vor|loc|lda|gps|ndb))\s*(?:runway\s*)?(\d{1,2}[LRC]?)\b/i);
+  if(m) return { kind:m[1].trim(), runway:m[2], raw:m[0] };
   return null;
 }
 
@@ -1078,6 +1261,147 @@ function deriveFieldElevations(states){
     departure: isOnGround(first) ? first.alt : null,
     arrival: isOnGround(last) ? last.alt : null
   };
+}
+
+// Turns the raw candidates collected from every [Procedures] line in the
+// file (player's own SID/STAR plus, in a busy log, plenty of background AI
+// traffic's) into the one SID and one STAR that actually belong to the
+// player. A candidate counts as confirmed only if a nearby line's callsign
+// token matched one of the player's own RAW callsigns as literally printed
+// on a "Player Callsign:" line (meta.playerCallsigns) - not the resolved
+// display-form callsign guessCallsign() returns (e.g. "LEIPZIGAIR 324" for
+// spoken ATC phraseology), since every nearby callsign=/aircraft= token in
+// these engine-internal lines is always the compact ICAO-style form (e.g.
+// "LHA324") the display form was derived FROM, and the two literally never
+// match as strings. Real sample logs split into two shapes: a sparse test
+// log with a handful of candidates and no callsign token anywhere near them
+// (nothing else in the file could they belong to, so fall back to using
+// them unfiltered), or a busy log with hundreds/thousands of candidates
+// spanning many aircraft (where an unmatched candidate must NOT be assumed
+// to be the player's - silence is the honest answer there, matching this
+// tool's established pattern of saying only what it actually knows). The
+// threshold below isn't a precise boundary, just "small enough that
+// ambiguity isn't realistically possible" - every real sparse sample seen
+// had 1-4 total candidates (one SID/STAR pair, occasionally the STAR
+// recomputed once more with the same result).
+// Picks the candidate to trust out of a list all already confirmed to
+// correlate to the player somehow. Prefers the LAST one whose correlation
+// came from a "strong" (explicit callsign=/aircraft= field) tag over the
+// last one overall, since a strong match is never a coincidence the way a
+// weak (RunwaySelect/RunwayAlloc-only) one can be in a busy log - see
+// extractCallsignToken's comment for the confirmed real false-positive this
+// guards against. Only falls back to "last overall" when NONE of the
+// matches for this list are strong, which preserves the one confirmed case
+// (`Player - ATC forgot me.log`'s LXJ569 STAR) that relies on a weak-only
+// match with nothing stronger nearby to prefer instead.
+function pickLatestProcedure(list, playerCallsigns){
+  if(!list.length) return null;
+  const strong = list.filter(c => c.nearbyStrongCallsigns && c.nearbyStrongCallsigns.some(t => playerCallsigns.includes(t)));
+  if(strong.length) return strong[strong.length-1];
+  return list[list.length-1];
+}
+
+function deriveAssignedProcedures(candidates, playerCallsigns){
+  if(!candidates || !candidates.length || !playerCallsigns || !playerCallsigns.length) return { sid:null, star:null };
+  // Sparse-fallback threshold only ever needs to reason about SID/STAR-type
+  // ambiguity - counting the whole candidates array (which since this
+  // feature also holds NO_SID/NO_STAR entries, an unrelated candidate type)
+  // would let enough incidental background-traffic "No SID/STAR available"
+  // lines silently push an otherwise-sparse log over the threshold and lose
+  // its previously-working fallback display, with zero change to the actual
+  // SID/STAR candidates the display depends on. Found during code review of
+  // Design Docs/planned-vs-actual-procedures.md - no live case in the
+  // sample logs hits this yet, but it costs nothing to close now.
+  const sidStarCandidates = candidates.filter(c => c.type === 'SID' || c.type === 'STAR');
+  let pool = candidates.filter(c => c.nearbyCallsigns.some(t => playerCallsigns.includes(t)));
+  if(!pool.length){
+    if(sidStarCandidates.length <= 4) pool = sidStarCandidates;
+    else return { sid:null, star:null };
+  }
+  const sids = pool.filter(c => c.type === 'SID');
+  const stars = pool.filter(c => c.type === 'STAR');
+  return {
+    sid: pickLatestProcedure(sids, playerCallsigns),
+    star: pickLatestProcedure(stars, playerCallsigns)
+  };
+}
+
+// Cases where BeyondATC's engine never computed a SID/STAR at all (see
+// RE_NO_PROCEDURE) - a separate function from deriveAssignedProcedures above,
+// not a modification of it, so the existing verified SID/STAR candidate path
+// stays untouched. No sparse-log position fallback needed here (unlike
+// deriveAssignedProcedures): the NO_SID/NO_STAR candidate's callsign is
+// embedded directly in the line itself, so a nearbyCallsigns match is a real
+// correlation, not a guess - if it doesn't match the player, it isn't theirs.
+function deriveVectoredProcedures(candidates, playerCallsigns){
+  if(!candidates || !candidates.length || !playerCallsigns || !playerCallsigns.length) return { sid:null, star:null };
+  const pool = candidates.filter(c => c.nearbyCallsigns.some(t => playerCallsigns.includes(t)));
+  const sids = pool.filter(c => c.type === 'NO_SID');
+  const stars = pool.filter(c => c.type === 'NO_STAR');
+  return {
+    sid: sids.length ? sids[sids.length-1] : null,
+    star: stars.length ? stars[stars.length-1] : null
+  };
+}
+
+// Renders the SimBrief-filed side of a SID/STAR pairing for #hProcedures -
+// "Planned SID: X, rwy Y", or "Planned departure: no SID filed, rwy Y" when
+// the flight plan itself has no charted SID (Plan has SID: False - still
+// worth showing the planned runway even then). Returns null if nothing about
+// the plan is known at all, matching this line's "render only what's known"
+// convention. procType is 'SID' or 'STAR'.
+function formatPlannedProcedure(planHas, name, rwy, procType){
+  const phase = procType === 'SID' ? 'departure' : 'arrival';
+  const rwyBit = rwy ? `, rwy ${rwy}` : '';
+  if(planHas === false) return `Planned ${phase}: no ${procType} filed${rwyBit}`;
+  if(name) return `Planned ${procType}: ${name}${rwyBit}`;
+  if(rwy) return `Planned ${phase}: rwy ${rwy}`;
+  return null;
+}
+
+// The runway/approach type actually cleared by ATC, straight from clearance
+// parsing already done by buildExchanges - no new parsing needed. This is
+// what the pilot was actually told to fly, which can differ from the STAR's
+// own runway if conditions changed it mid-flight (a real reassignment, not
+// a parsing inconsistency - see deriveAssignedProcedures above and the
+// reassignment check in loadLeg). Prefers an approach clearance (has a
+// type, e.g. "ILS") over a landing clearance (runway only, no type).
+function deriveAssignedApproach(exchanges){
+  const approaches = exchanges.filter(ex => ex.clearance.approach);
+  if(approaches.length){
+    const last = approaches[approaches.length-1].clearance.approach;
+    return { kind: last.kind, runway: last.runway };
+  }
+  const landings = exchanges.filter(ex => ex.clearance.landing && ex.clearance.landing.runway);
+  if(landings.length){
+    const last = landings[landings.length-1].clearance.landing;
+    return { kind: null, runway: last.runway };
+  }
+  return null;
+}
+
+// BeyondATC's engine sometimes computes a SID internally despite the voiced
+// IFR clearance never naming it - confirmed real via the "Radar vectors
+// MOGEE, then as filed" clearance template, used specifically when no
+// charted SID exists for the flight (Plan has SID: False), distinct from the
+// "Cleared to X via <SID> departure" template used whenever a real SID IS
+// assigned - so this can't misfire against a normal SID clearance's own
+// wording. Scanning is bounded to lineIndex <= liftoffLineIndex (the
+// pre-liftoff ground-clearance window, same isOnGround/firstAirborneState
+// anchor as deriveTransponderAlert) as a structural guard, not just reliance
+// on the phrase being unique - confirmed necessary against a real in-flight
+// "cleared direct X, resume the Y" SID-rejoin shortcut (`KADS that
+// works.log`) that must never be mistaken for ATC assigning vectors instead
+// of the SID. See Design Docs/planned-vs-actual-procedures.md Finding #4.
+function deriveDepartureVectors(exchanges, liftoffLineIndex){
+  for(const ex of exchanges){
+    if(ex.lineIndex > liftoffLineIndex) break;
+    if(ex.atc && ex.atc.text){
+      const m = ex.atc.text.match(/radar vectors\s+([A-Z0-9]+),?\s*then as filed/i);
+      if(m) return { fix: m[1].toUpperCase() };
+    }
+  }
+  return null;
 }
 
 // The "on approach, too fast" check is about the arrival phase, but an
@@ -2602,6 +2926,68 @@ function loadLeg(idx){
       document.getElementById('categoryTable').scrollIntoView({behavior:'smooth', block:'center'});
     });
   }
+
+  // Surfaces the SID/STAR/runway actually assigned to the player, buried
+  // otherwise in exchange-by-exchange detail - see deriveAssignedProcedures/
+  // deriveAssignedApproach above. Deliberately separate from #hRoute, which
+  // stays the SimBrief flight-PLANNED route - this line is what actually
+  // happened. Each piece renders only if it's actually known, and the whole
+  // line hides if nothing is, same honesty pattern as hCatNote/hFlightNote.
+  const procNote = document.getElementById('hProcedures');
+  const assignedProc = deriveAssignedProcedures(PARSED.meta.procedureCandidates, PARSED.meta.playerCallsigns);
+  const vectoredProc = deriveVectoredProcedures(PARSED.meta.procedureCandidates, PARSED.meta.playerCallsigns);
+  // Pre-liftoff window for deriveDepartureVectors - same isOnGround/
+  // firstAirborneState anchor as deriveTransponderAlert. No anchor (log
+  // doesn't capture the ground phase) means no bound is needed either, since
+  // there's no pre-liftoff clearance in the log to mis-scan in the first
+  // place.
+  const groundState0 = PARSED.states[0];
+  const airborne0 = (groundState0 && isOnGround(groundState0)) ? firstAirborneState(PARSED.states, groundState0) : null;
+  const liftoffLineIndex = airborne0 ? airborne0.lineIndex : Infinity;
+  const departureVectors = deriveDepartureVectors(EXCHANGES, liftoffLineIndex);
+  const assignedApproach = deriveAssignedApproach(EXCHANGES);
+  const procParts = [];
+  const plannedDep = formatPlannedProcedure(PARSED.meta.planHasSid, PARSED.meta.plannedSid, PARSED.meta.plannedDepRwy, 'SID');
+  if(plannedDep) procParts.push(plannedDep);
+  const plannedArr = formatPlannedProcedure(PARSED.meta.planHasStar, PARSED.meta.plannedStar, PARSED.meta.plannedArrRwy, 'STAR');
+  if(plannedArr) procParts.push(plannedArr);
+  // Departure/arrival precedence: the most authoritative source that's
+  // actually known wins - voiced vectors clearance, then the engine's own
+  // "No SID/STAR available" signal, then the existing assigned-candidate
+  // fallback (unchanged from before this feature).
+  if(departureVectors) procParts.push(`Departure: Radar vectors to ${departureVectors.fix}, then as filed`);
+  else if(vectoredProc.sid) procParts.push(`Departure: no SID computed, rwy ${vectoredProc.sid.runway} (vectored)`);
+  else if(assignedProc.sid) procParts.push(`Departure: SID ${assignedProc.sid.name}, rwy ${assignedProc.sid.runway}`);
+  if(vectoredProc.star) procParts.push(`Arrival: no STAR computed, rwy ${vectoredProc.star.runway} (vectored)`);
+  else if(assignedProc.star) procParts.push(`Arrival: STAR ${assignedProc.star.name}, rwy ${assignedProc.star.runway}`);
+  if(assignedApproach){
+    const kindLabel = assignedApproach.kind ? `${assignedApproach.kind} approach` : 'Cleared to land';
+    // Compare normalized (leading zero stripped - "08R"/"8R" are the same
+    // runway spoken two ways, not a reassignment) so this only flags a real
+    // change, not a formatting difference between the engine's own STAR
+    // computation and how ATC's voice clearance got transcribed. Confirmed
+    // the false-positive shape against a real log: `Player (4).log` ("9" vs
+    // "09"). `Player (2).log` is a genuine reassignment (STAR-planned 26L,
+    // actually cleared 8R - a real runway change, not a format variant) and
+    // is correctly still flagged as one; it was originally miscited here as
+    // a second false-positive example (caught during the debugger
+    // regression suite's QA pass, 2026-08-23 - see tests/fixtures/ and
+    // atc-compliance-debugger.NOTES.md).
+    const normRwy = r => r ? r.replace(/^0+(?=\d)/, '') : r;
+    const reassigned = assignedProc.star && assignedApproach.runway && normRwy(assignedApproach.runway) !== normRwy(assignedProc.star.runway);
+    const rwyLabel = assignedApproach.runway
+      ? `rwy ${assignedApproach.runway}${reassigned ? ` (reassigned from rwy ${assignedProc.star.runway})` : ''}`
+      : '';
+    procParts.push(`Cleared: ${kindLabel}${rwyLabel ? ' '+rwyLabel : ''}`);
+  }
+  if(procParts.length){
+    procNote.style.display = 'block';
+    procNote.innerHTML = procParts.join(' &nbsp;·&nbsp; ');
+  } else {
+    procNote.style.display = 'none';
+    procNote.innerHTML = '';
+  }
+
   PARSED.meta.fieldElevations = deriveFieldElevations(PARSED.states);
   if(PARSED.meta.fieldElevations.arrival != null){
     CFG.approachAltThreshold.label = `"On approach" altitude (AGL, field ~${Math.round(PARSED.meta.fieldElevations.arrival)}ft)`;
