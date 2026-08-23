@@ -4,6 +4,16 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.5.0] - 2026-08-23
+
+### Added
+- A procedures line beneath the flight's route header shows the SID/STAR/runway actually assigned to the player - previously buried in exchange-by-exchange detail - flagging a genuine mid-flight runway reassignment ("(reassigned from rwy X)").
+- The same line also shows what was originally *filed* (from the log's own SimBrief-plan header fields) side by side with what was actually assigned, so a real divergence - a different SID/STAR name, a changed runway, or vectors used instead of a charted procedure - is visible at a glance. Motivated by player reports of runways/procedures changing mid-flight that needed direct verification against the debugger.
+
+### Fixed
+- Approach-clearance recognition was limited to phraseology containing the word "approach" ("cleared ILS approach runway 07"), missing a real clearance family that omits it entirely ("cleared R-NAV-Z 34L", "cleared R-NAV 35"). This wasn't just a display gap - an approach clearance also supersedes any still-open heading/altitude vector, so missing one could leave an earlier clearance's compliance window open longer than it should have been.
+- Procedure-candidate correlation (used by the procedures line above) could, rarely in a busy multi-aircraft log, misattribute a background aircraft's SID/STAR computation to the player when only a positional tag (not one naming the aircraft directly for that computation) was nearby. The correlation now prefers a tag that names the aircraft directly whenever one exists, falling back to a positional-only match only when nothing more specific is available. Also adds recognition of BeyondATC's own runway-reassignment log line, closing a related gap where a real weather-driven runway change had no correlation tag at all nearby and rendered the stale pre-change runway.
+
 ## [1.4.1] - 2026-08-22
 
 ### Fixed
