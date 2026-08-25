@@ -1608,7 +1608,17 @@ function evaluateExchange(ex, cfg){
         // approach course, not evidence it ignored the clearance).
         const spreadWin = hdgWin.filter(s => s.lineIndex >= hdgProgressStart.lineIndex);
         const hdgSpread = spreadWin.length ? Math.max(...spreadWin.map(s=>headingDiff(s.hdg, spreadWin[0].hdg))) : 0;
-        const sustainedNonProgress = !hdgTriggerPending && spreadWin.length >= 2 && hdgSpread <= cfg.hdgTol;
+        // >=2 samples alone isn't enough - they also need to span real
+        // elapsed time, or a clearance superseded a sample later within the
+        // same one-minute PlayerState timestamp reads identically to a
+        // multi-minute genuine stall. Confirmed against a real log: AXM533
+        // (WMKP->WMKK) got "turn right, heading 190" then had it superseded
+        // one sample later, still the same :25 minute, heading barely
+        // changed (11°->12°) - not enough real time for any turn to
+        // physically show up, but the old check (no elapsed-time floor)
+        // graded it identically to AAL3264's real several-minute stall.
+        const spreadElapsed = spreadWin.length ? spreadWin[spreadWin.length-1].timeMin - spreadWin[0].timeMin : 0;
+        const sustainedNonProgress = !hdgTriggerPending && spreadWin.length >= 2 && hdgSpread <= cfg.hdgTol && spreadElapsed >= 1;
         const actual = Math.round(finalState.hdg);
         const diff = Math.round(finalDiff);
         // Also require real evidence the aircraft actually turned since the
@@ -1812,7 +1822,17 @@ function evaluateExchange(ex, cfg){
       // (hasStoppedFlying), mirroring the HDG guard - normal ground
       // movement after landing isn't a maintained-altitude deviation.
       let worstDrift = null;
-      if(!untilEstablished){
+      // Same pointRestriction carve-out as the finalState branch below: a
+      // "cross FIX at/above/below ALTITUDE" restriction only matters exactly
+      // at that fix. When it's satisfied quickly enough that compliedAt
+      // fires (rather than falling through to the finalState branch),
+      // continuing to climb/descend away from targetFt afterward is the
+      // normal, expected outcome of crossing the fix, not drift. Confirmed
+      // against a real log: AXM533's "cross Vector_ILS_4 at or above 6,000,
+      // cleared ILS approach runway 33" complied near the fix, then
+      // correctly kept descending to 2,512ft on the approach - misjudged as
+      // a "-3488ft" bust before this branch also exempted pointRestriction.
+      if(!untilEstablished && !pointRestriction){
         const compliedIdx = altWin.indexOf(compliedAt);
         const afterCompliance = altWin.slice(compliedIdx+1).filter(s => !hasStoppedFlying(s));
         for(const s of afterCompliance){
@@ -2708,9 +2728,19 @@ function guessCallsign(events, callsignHints){
   // guess ("Mike 9") then broke refineSpeakersByCallsign's callsign-position
   // check for one instruction, silently dropping a real ATC heading vector
   // from the exchange list entirely.
+  // Also allows an optional literal "Flight" between the airline name and
+  // the number ("Frontier Flight 4204") - without it, the match starts at
+  // "Flight" itself and "Frontier" is silently dropped from the guess,
+  // which then fails every downstream startRe/posReportRe/etc check in
+  // refineSpeakersByCallsign since the real transmissions all lead with the
+  // full "Frontier Flight 4204" - every ATC line in the log stayed
+  // classified 'UNKNOWN' forever and buildExchanges (which only looks at
+  // speaker==='ATC') produced zero exchanges. Confirmed 2026-08-25 via
+  // `Player (11).log` (FFT4204, PAE-KLAS) - the debugger showed no data at
+  // all for a real user-supplied log, not a synthetic edge case.
   const freq = {};
   events.forEach(e=>{
-    const matches = e.text.match(/\b[A-Z][A-Za-z]* \d{1,5}[A-Z]{0,3}(?: Heavy)?\b/g);
+    const matches = e.text.match(/\b[A-Z][A-Za-z]*(?: Flight)? \d{1,5}[A-Z]{0,3}(?: Heavy)?\b/g);
     if(matches) matches.forEach(m=>{
       // Allowing ALL-CAPS words above (not just Title-case) also widened
       // the match to real aviation jargon that isn't a callsign but shares

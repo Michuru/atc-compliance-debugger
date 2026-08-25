@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.5.1] - 2026-08-25
+
+### Fixed
+- Callsign detection: the frequency-guess fallback regex could only capture one leading word before the number, so an airline callsign spoken as "\<Airline\> Flight ####" (e.g. "Frontier Flight 4204") lost the airline name and guessed just "Flight 4204." Every ATC line then failed to match against the wrong guess and stayed misclassified as unknown speaker, so the tool produced zero exchanges for the entire flight - not a partial miss, no data at all. Fixed by allowing an optional "Flight" token in the fallback pattern.
+
 ## [1.5.0] - 2026-08-23
 
 ### Added
