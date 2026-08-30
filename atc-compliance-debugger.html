@@ -310,6 +310,27 @@ const RE_PLAYER_CALLSIGN = /Player Callsign:\s*(\S+)/;
 // flight-info block regardless of SimBrief use, so it's read as the
 // primary source now.
 const RE_AIRCRAFT_TYPE = /Aircraft Type:\s*(\S+)/;
+// Same fallback-source gap as RE_AIRCRAFT_TYPE above, same fix pattern: these
+// four lines are also written unconditionally in every log's flight-info
+// block, but meta.orig/dest/origrwy/destrwy had only ever been read from the
+// SimBrief URL's query params - an MSFS-loaded (no-SimBrief) flight had no
+// origin/destination/runway source at all, silently showing "Route info not
+// found in log" despite the airports sitting right there in the log. Found
+// 2026-08-25 investigating a real player's landing-call bug report
+// (`Player (13).log`, CJC6->CYQR, MSFS Flight Plan import) after confirming
+// against two known-good no-SimBrief VFR logs that these fields are always
+// present and real (e.g. a fetched arrival METAR proves the destination code
+// is genuine, not a blank default). Anchored with ^ so a line like "SimBrief
+// Planned Departure Runway:" can't cross-match "Departure Runway:".
+const RE_DEP_AIRPORT = /^Departure Airport:\s*(\S+)/;
+const RE_DEST_AIRPORT = /^Destination Airport:\s*(\S+)/;
+const RE_DEP_RWY = /^Departure Runway:\s*(\S+)/;
+const RE_ARR_RWY = /^Arrival Runway:\s*(\S+)/;
+// Same unconditionally-written-but-never-read pattern as the fields above -
+// every log's flight-info block has "Flight Rules: VFR" or "Flight Rules:
+// IFR" - added 2026-08-25 so the tool can show this and gate the VFR-only
+// frequency badge in renderStrip on it.
+const RE_FLIGHT_RULES = /^Flight Rules:\s*(\S+)/;
 // BeyondATC's engine logs one of these lines whenever it computes a SID/STAR
 // for an aircraft - see parseLegLines' RE_PROCEDURES branch and
 // deriveAssignedProcedures() for how this gets attributed to the player
@@ -533,6 +554,37 @@ function findLegBoundaries(lines){
   return bounds.length ? bounds : [0];
 }
 
+// Same failure class collectProcedureCandidates below already had to work
+// around: "Flight Rules:" can sit on either side of a leg's own "Player
+// Callsign:" line depending on import source (SimBrief-style logs put it
+// after; MSFS Flight Plan imports put it immediately before), so the main
+// per-leg [startIdx,endIdx) window in parseLegLines - which starts AT
+// "Player Callsign:" - silently misses it for the MSFS-import case (found
+// 2026-08-25 against `Player (13).log`, a VFR/no-SimBrief flight, while
+// the frequency-badge feature was being verified). Bounded to this leg's
+// own flight-info block (found by scanning outward from startIdx for the
+// literal `--------------------FLIGHT INFORMATION--------------------`/
+// `------------------FLIGHT INFORMATION END------------------` markers)
+// rather than a blind whole-file scan, so a multi-leg log can't have one
+// leg's Flight Rules line bleed into another's.
+function findFlightRulesForLeg(lines, startIdx){
+  let blockStart = startIdx;
+  while(blockStart > 0 && !/^-+FLIGHT INFORMATION-+$/.test(lines[blockStart])) blockStart--;
+  // If no start marker exists at all (older/truncated log format), don't
+  // silently widen to a whole-file scan - a markerless multi-leg log could
+  // then bleed a neighboring leg's Flight Rules into this one. Degrade to
+  // null instead, same as every other unfound meta field.
+  if(!/^-+FLIGHT INFORMATION-+$/.test(lines[blockStart])) return null;
+  let blockEnd = startIdx;
+  while(blockEnd < lines.length-1 && !/^-+FLIGHT INFORMATION END-+$/.test(lines[blockEnd])) blockEnd++;
+  if(!/^-+FLIGHT INFORMATION END-+$/.test(lines[blockEnd])) return null;
+  for(let i=blockStart; i<=blockEnd; i++){
+    const m = lines[i].match(RE_FLIGHT_RULES);
+    if(m) return m[1];
+  }
+  return null;
+}
+
 // BeyondATC logs a `[Procedures] SID/STAR is ...` line whenever its engine
 // computes a departure/arrival procedure for ANY aircraft it's tracking -
 // player and background AI traffic alike - with no callsign on the line
@@ -620,7 +672,7 @@ function parseLegLines(lines, startIdx, endIdx){
   const states = [];       // all PlayerState samples, chronological
   const events = [];       // all Instruction events (ATC or PILOT)
   let meta = { cruiseAlt:null, orig:null, dest:null, origrwy:null, destrwy:null, actype:null, route:null, simbriefUrl:null, playerCallsigns:[], procedureCandidates:[],
-    planHasSid:null, planHasStar:null, plannedSid:null, plannedSidTrans:null, plannedStar:null, plannedStarTrans:null, plannedDepRwy:null, plannedArrRwy:null };
+    planHasSid:null, planHasStar:null, plannedSid:null, plannedSidTrans:null, plannedStar:null, plannedStarTrans:null, plannedDepRwy:null, plannedArrRwy:null, flightRules:null };
 
   for(let i=startIdx;i<endIdx;i++){
     const line = lines[i];
@@ -629,6 +681,10 @@ function parseLegLines(lines, startIdx, endIdx){
     if((m = line.match(RE_CRUISE))){ meta.cruiseAlt = parseInt(m[1]); continue; }
     if((m = line.match(RE_PLAYER_CALLSIGN))){ meta.playerCallsigns.push(m[1]); continue; }
     if((m = line.match(RE_AIRCRAFT_TYPE))){ meta.actype = m[1]; continue; }
+    if((m = line.match(RE_DEP_AIRPORT))){ meta.orig = m[1]; continue; }
+    if((m = line.match(RE_DEST_AIRPORT))){ meta.dest = m[1]; continue; }
+    if((m = line.match(RE_DEP_RWY))){ meta.origrwy = m[1]; continue; }
+    if((m = line.match(RE_ARR_RWY))){ meta.destrwy = m[1]; continue; }
     if((m = line.match(RE_PLAN_HAS_SID))){ meta.planHasSid = m[1].toLowerCase()==='true'; continue; }
     if((m = line.match(RE_PLAN_HAS_STAR))){ meta.planHasStar = m[1].toLowerCase()==='true'; continue; }
     if((m = line.match(RE_PLANNED_SID_TRANS))){ meta.plannedSidTrans = m[1]; continue; }
@@ -744,6 +800,55 @@ function parseLegLines(lines, startIdx, endIdx){
     }
   }
 
+  // Bare/greeting-only altitude check-ins ("Facility, Callsign, FL350.", no
+  // report verb at all - "Seattle Center, Frontier Flight 4204, FL350.")
+  // are NOT safely text-classifiable alone with full confidence: an initial
+  // library audit surfaced many instances of this exact shape sitting at
+  // 'ATC' (e.g. "Cleveland Center, United 1864, FL340." repeating at nearly
+  // every center handoff in Player (2).log) that looked like real ATC
+  // counterexamples - a code-reviewer pass on this fix later traced every
+  // one of them individually and confirmed they were ALL genuinely the
+  // pilot's own check-in, i.e. the tool's own PRE-EXISTING misclassification
+  // bug (this fix's whole reason for existing), not evidence of ATC
+  // producing this shape. No genuine ATC counterexample was ultimately
+  // found anywhere in the 48-file library. Kept the two-signal (shape+tag)
+  // design anyway rather than simplifying to a bare text regex, since that
+  // finding came from spot-checking specific instances, not an exhaustive
+  // re-audit of every bare-shape occurrence - see BACKLOG_ARCHIVE.md for
+  // the full citation set and this caveat.
+  // Real, reliable ground truth instead: BeyondATC's own [ControllerScript]
+  // AICommunicationSystem.IFR.VerifyCallsignAltitudeScript fires shortly
+  // after EVERY genuine instance of this shape - its job, per its own name,
+  // is verifying what the pilot/aircraft just reported. Confirmed
+  // exhaustively: grepped every [Instruction] line preceding this tag across
+  // multiple real logs (Player (2)/(4)/(7)/(11).log, Player.log, Player
+  // slc.txt) - 100% match the check-in/position-report family, zero
+  // unrelated ATC clearance ever precedes it, regardless of whether the
+  // tool's own current (unreliable, sid-based) guess for that event happens
+  // to be right or wrong already. Tags the event itself (rather than adding
+  // a text regex) so refineSpeakersByCallsign can use it as a narrow
+  // fallback without needing raw `lines` access - see its own comment there.
+  // 20-line window matches this file's existing sid/LVI-proximity
+  // convention (e.g. `i - lastLVILine < 20` above), but is ALSO bounded to
+  // stop at the next event's own lineIndex - without that second bound, a
+  // check-in whose own verify script fires >20 raw lines away (common, since
+  // background-traffic chatter interleaves) leaves the window wide enough to
+  // instead reach past an unrelated intervening event and wrongly tag IT
+  // instead. Found live: `Player - visual example.log`'s "Contact Chicago
+  // Center 125.575, American 3264, good day." (a readback, not a check-in)
+  // sat 12 lines before the FOLLOWING check-in's own verify script and was
+  // incorrectly tagged. Same root cause as the `[PlayerAction]` tag's own
+  // documented "must be consumed, not just windowed" fix above.
+  for(let idx=0; idx<events.length; idx++){
+    const e = events[idx];
+    const nextEventLine = events[idx+1] ? events[idx+1].lineIndex : endIdx;
+    const scanEnd = Math.min(endIdx, e.lineIndex+20, nextEventLine);
+    for(let k=e.lineIndex+1; k<scanEnd; k++){
+      if(/VerifyCallsignAltitudeScript/.test(lines[k])){ e.checkInVerified = true; break; }
+    }
+  }
+
+  meta.flightRules = findFlightRulesForLeg(lines, startIdx);
   return { meta, states, events };
 }
 
@@ -925,6 +1030,19 @@ function parseSpeedClearance(text){
   return null;
 }
 
+// Discrete squawk assignment - real, spec'd BeyondATC VFR behavior per
+// wiki.beyondatc.net/vfr/callsigns-and-squawks/ ("Region-Correct Squawk
+// Assignment... preventing European codes from persisting into U.S.
+// airspace"). Requires exactly 4 digits to avoid two real non-assignment
+// uses of the word "squawk" already seen in the sample library: a garbled
+// 3-digit transcript artifact ("Squawk Delta 132," Player (10).log) and the
+// real ATC phrase "squawk ident" (no code at all, means press ident).
+// See Design Docs/squawk-assigned-vs-actual-check.md.
+function parseSquawkClearance(text){
+  const m = text.match(/\bsquawk\s+(\d{4})\b/i);
+  return m ? { code: m[1], raw: m[0] } : null;
+}
+
 function parseApproachClearance(text){
   let m = text.match(/cleared\s+(the\s+)?([\w\s]+?)\s+approach(?:\s+runway\s*(\w+))?/i);
   if(m) return { kind:m[2].trim(), runway:m[3]||null, raw:m[0] };
@@ -945,6 +1063,21 @@ function parseLandingClearance(text){
   if(m) return { runway:m[1], raw:m[0] };
   if(/cleared to land/i.test(text)) return { runway:null, raw:text.match(/cleared to land/i)[0] };
   return null;
+}
+
+// "<callsign>, airport is at your <clock> o'clock <N> miles. Report the
+// field in sight." - a position-report request with no gradable numeric
+// target (unlike altitude/heading/speed), so it needs its own presence-only
+// parse rather than a value to converge on. See
+// Design Docs/position-report-timeliness-check.md - confirmed as the
+// player's own real exchange (not background traffic) in 10 real
+// Player Log Samples/ logs, zero speaker-misclassification found. The
+// broader "report midfield downwind" phrasing is deliberately OUT OF SCOPE
+// (too thin an evidence base, no literal keyword in the real pilot reply) -
+// left as a documented, deferred gap, not handled here.
+function parseFieldInSightRequest(text){
+  const m = text.match(/report the field in sight/i);
+  return m ? { raw: m[0] } : null;
 }
 
 // Pilot/Controller Glossary phrases that explicitly cancel a still-open
@@ -968,9 +1101,11 @@ function classify(text){
     altitude: parseAltitudeClearance(text),
     heading: parseHeadingClearance(text),
     speed: parseSpeedClearance(text),
+    squawk: parseSquawkClearance(text),
     approach: parseApproachClearance(text),
     landing: parseLandingClearance(text),
-    cancel: parseCancelClearance(text)
+    cancel: parseCancelClearance(text),
+    fieldInSight: parseFieldInSightRequest(text)
   };
 }
 
@@ -978,8 +1113,70 @@ function classify(text){
    EXCHANGE BUILDING + COMPLIANCE EVALUATION
    ============================================================ */
 
+// A pilot transmission whose SECOND comma-separated segment is the aircraft's
+// own callsign (optionally preceded by "this is" - "Regina Tower, this is
+// CS-SUE, ..." is a real variant), with real content following it, is the
+// FAA AIM 4-2-3 "<Facility/greeting>, <Callsign>, <message>" initial-call-up
+// shape - a NEW transmission, not necessarily a reply to whatever ATC line
+// happens to precede it in the log. Found 2026-08-25 via a real user bug
+// report (`Player (13).log`: "CS SUE, Altimeter at Hafford is 2992." paired
+// with the pilot's unrelated "Saskatoon Tower, CS-SUE, Beechcraft Baron at
+// 5000 feet, requesting Delta transition." as if it were a response to the
+// altimeter setting - the pilot was never told to contact Saskatoon Tower,
+// so this call-up is genuinely spontaneous).
+// **This shape is NOT always a misattribution, though** - a code-reviewer
+// pass on the first version of this fix (which excluded on shape alone)
+// found real regressions: after an ATC "contact <facility> <freq>" handoff,
+// the pilot's check-in call on the NEW facility has this exact same shape
+// and IS the correct, expected readback (e.g. "Contact ground 121.9, N98GD,
+// have a good afternoon." -> "Ground 121.9, N98GD, have a good afternoon
+// too." is a genuine reply, not a spontaneous new topic). The real
+// distinguishing signal is whether the ATC instruction being paired itself
+// authorized the frequency change - see `hasFrequencyMention` and its call
+// site below, not this function alone.
+// Deliberately NOT reusing the broader `playerActionTriggered`/
+// `RE_PILOT_REQUEST` flag for the shape check either - that flag is already
+// true for legitimate direct answers too (e.g. "Request direct to SHAPP,
+// Broadsword 925." genuinely answering ATC's "say fix name"), so using it
+// here would break real readback pairings, not just fix broken ones.
+function isInitialContactShape(text, callsigns){
+  const parts = text.split(',');
+  if(parts.length < 3) return false;
+  // Strips both whitespace and hyphens before comparing - real logs use
+  // both "CS-SUE" and "CS SUE" for the same callsign depending on which
+  // pipeline wrote the line, and a bare whitespace-only normalization
+  // would miss a match across that difference.
+  const norm = s => s.toUpperCase().replace(/[\s-]+/g,'');
+  const seg1 = norm(parts[1].trim().replace(/^this\s+is\s+/i,''));
+  return callsigns.some(cs => seg1 === norm(cs));
+}
+// Detects an ATC instruction that hands the aircraft off to a new facility -
+// either a real VHF COM frequency (3-digit-dot-1-to-3-digit decimal in the
+// 118-136 range - an altimeter setting like "2992" has no decimal point, so
+// it never matches), the word "contact" ("Contact Lone Star Departure,
+// N671MD, good day." - a real phrasing variant with no frequency digit at
+// all, presumably because it was already given elsewhere), or the phrase
+// "frequency change" (another no-frequency-digit handoff variant: "Frequency
+// change, so long, Beechcraft 1GV."). Used to gate isInitialContactShape
+// above: only a facility-leading pilot call-up following an instruction that
+// did NOT hand off a frequency counts as a genuine spontaneous misattribution
+// - audited against the full Player Log Samples/ library (2026-08-26,
+// following a code-reviewer pass on the first version of this fix that found
+// both of the no-digit phrasings above still wrongly excluded).
+function hasFrequencyMention(text){
+  // "radar contact" (routine radar-identification phraseology, ~33
+  // occurrences across the sample library) is NOT a facility/frequency
+  // handoff - the negative lookbehind keeps a bare "contact" match from
+  // firing on it. Found in a second code-reviewer pass (2026-08-26):
+  // currently dormant (no live case where a spontaneous misattribution
+  // follows a "radar contact" line in the sample library), but a real gap
+  // that would silently reopen the original bug class the moment one does.
+  return /\b1[123]\d\.\d{1,3}\b/.test(text) || /(?<!radar\s)\bcontact\b/i.test(text) || /\bfrequency\s+change\b/i.test(text);
+}
+
 function buildExchanges(parsed){
-  const { events, states } = parsed;
+  const { events, states, meta } = parsed;
+  const callsigns = meta.playerCallsigns || [];
   const atcEvents = events.filter(e=>e.speaker==='ATC');
   const exchanges = [];
   const classified = atcEvents.map(e=>classify(e.text));
@@ -989,12 +1186,33 @@ function buildExchanges(parsed){
     const gi = events.indexOf(atc);
     // find readback: next event(s) up to 4 ahead that is PILOT, before another ATC event
     let readback = null;
+    const atcHandedOffFreq = hasFrequencyMention(atc.text);
     for(let j=gi+1;j<events.length && j<=gi+4;j++){
       if(events[j].speaker==='ATC') break;
-      if(events[j].speaker==='PILOT'){ readback = events[j]; break; }
+      if(events[j].speaker==='PILOT'){
+        // A facility-leading call-up closes the search UNLESS this
+        // instruction itself handed off a frequency - in that case the
+        // call-up on the new facility is the correct, expected readback,
+        // not a spontaneous new topic. See isInitialContactShape's comment.
+        if(!atcHandedOffFreq && isInitialContactShape(events[j].text, callsigns)) break;
+        readback = events[j]; break;
+      }
     }
     const clearance = classified[idx];
-    const hasTarget = clearance.altitude || clearance.heading || clearance.speed;
+    // Deliberately does NOT include clearance.squawk (an earlier draft did -
+    // code-reviewer caught it producing new false-positive RESP "No readback
+    // captured" warnings on >=10 real exchanges across 3 sample logs, because
+    // a squawk readback that references the aircraft by TYPE ("Beechcraft
+    // 33K") rather than its tracked tail number ("N7733K") isn't recognized
+    // by refineSpeakersByCallsign and gets misclassified ATC - a pre-existing
+    // classifier gap this change would have newly exposed as noise rather
+    // than fixed. Reverted rather than chasing that gap here - out of scope
+    // for this check, see Design Docs/squawk-assigned-vs-actual-check.md.
+    // clearance.fieldInSight (added - see
+    // Design Docs/position-report-timeliness-check.md) IS safe to include:
+    // that check specifically verified zero speaker-misclassification risk
+    // across all 10 real instances found, unlike squawk above.
+    const hasTarget = clearance.altitude || clearance.heading || clearance.speed || clearance.fieldInSight;
 
     // Short "display" window: bounded by the very next ATC transmission of any
     // kind. Used only for the immediate readback/detail snapshot in the UI.
@@ -1029,6 +1247,14 @@ function buildExchanges(parsed){
     // cleared to land. This is a judgment call, not verified against a
     // real log with an approach-clearance-supersedes-speed example.
     let spdWindowEnd = Infinity, spdSupersededBy = null, spdSupersededByIdx = null;
+    // SQUAWK mirrors SPD's closing rules minus the "doesn't close on
+    // approach" nuance (a squawk assignment has no approach-vectoring
+    // interaction) - closes on a new squawk assignment or landing. No
+    // real-log cancellation phrase exists for a squawk reassignment, so
+    // unlike ALT/HDG/SPD there's no `cancel.squawk` branch yet - add one if
+    // a real log ever surfaces the phrasing. See
+    // Design Docs/squawk-assigned-vs-actual-check.md.
+    let squawkWindowEnd = Infinity, squawkSupersededBy = null, squawkSupersededByIdx = null;
     for(let j=idx+1;j<atcEvents.length;j++){
       if(altWindowEnd===Infinity){
         if(classified[j].altitude){ altWindowEnd = atcEvents[j].lineIndex; altSupersededBy = 'altitude'; altSupersededByIdx = atcEvents[j].lineIndex; }
@@ -1047,17 +1273,33 @@ function buildExchanges(parsed){
         else if(classified[j].landing){ spdWindowEnd = atcEvents[j].lineIndex; spdSupersededBy = 'landing'; spdSupersededByIdx = atcEvents[j].lineIndex; }
         else if(classified[j].cancel.speed){ spdWindowEnd = atcEvents[j].lineIndex; spdSupersededBy = 'canceled'; spdSupersededByIdx = atcEvents[j].lineIndex; }
       }
-      if(altWindowEnd!==Infinity && hdgWindowEnd!==Infinity && spdWindowEnd!==Infinity) break;
+      if(squawkWindowEnd===Infinity){
+        // Only a DIFFERENT code counts as superseding. Found live verifying
+        // against `Player - Denver Bravo crossing and automatic PIREP.log`:
+        // BeyondATC sometimes echoes its own just-issued squawk in a second,
+        // separate [Instruction] line moments later ("N7733K, radar service
+        // terminated, squawk 1200..." immediately followed by "Squawk 1200,
+        // N7733K, good day." - confirmed genuinely ATC-both, not a
+        // misclassified pilot readback, via the [VoiceAssign] controller=
+        // line immediately after it). Treating that repeat as a new
+        // clearance closed the original exchange's window before the
+        // aircraft had any real chance to comply, producing a false "never
+        // set" bad verdict. A same-value repeat now leaves the window open.
+        if(clearance.squawk && classified[j].squawk && classified[j].squawk.code !== clearance.squawk.code){ squawkWindowEnd = atcEvents[j].lineIndex; squawkSupersededBy = 'squawk'; squawkSupersededByIdx = atcEvents[j].lineIndex; }
+        else if(classified[j].landing){ squawkWindowEnd = atcEvents[j].lineIndex; squawkSupersededBy = 'landing'; squawkSupersededByIdx = atcEvents[j].lineIndex; }
+      }
+      if(altWindowEnd!==Infinity && hdgWindowEnd!==Infinity && spdWindowEnd!==Infinity && squawkWindowEnd!==Infinity) break;
     }
     const altWindowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < altWindowEnd);
     const hdgWindowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < hdgWindowEnd);
     const spdWindowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < spdWindowEnd);
+    const squawkWindowStates = states.filter(s => s.lineIndex >= atc.lineIndex && s.lineIndex < squawkWindowEnd);
 
     exchanges.push({
       id: idx,
       lineIndex: atc.lineIndex,
       atc, readback, clearance, hasTarget,
-      windowStates, altWindowStates, hdgWindowStates, spdWindowStates,
+      windowStates, altWindowStates, hdgWindowStates, spdWindowStates, squawkWindowStates,
       altSuperseded: altWindowEnd !== Infinity,
       altSupersededBy,
       altSupersededByIdx,
@@ -1067,6 +1309,9 @@ function buildExchanges(parsed){
       spdSuperseded: spdWindowEnd !== Infinity,
       spdSupersededBy,
       spdSupersededByIdx,
+      squawkSuperseded: squawkWindowEnd !== Infinity,
+      squawkSupersededBy,
+      squawkSupersededByIdx,
       isLast: !nextAtc
     });
   }
@@ -1173,6 +1418,41 @@ function fmtTime(min){
   if(min==null) return '—';
   const h = Math.floor(min/60)%24, m = min%60;
   return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+}
+// PlayerState's com1/com2 carry a trailing on/off suffix BeyondATC appends
+// ("134.325(On)") - strips it down to the bare frequency for display.
+function parseFreq(raw){
+  if(!raw) return null;
+  const m = raw.match(/^([\d.]+)/);
+  return m ? m[1] : null;
+}
+// state.xpdr is still the raw "5057(On)" string - xpdrOn() (below, used by
+// deriveTransponderAlert) only ever reads the On/Off half, by design. This
+// is an additive companion, not a replacement, for the squawk
+// assigned-vs-actual check - see Design Docs/squawk-assigned-vs-actual-check.md.
+function parseSquawk(state){
+  if(!state || !state.xpdr) return null;
+  const m = state.xpdr.match(/^(\d{4})/);
+  return m ? m[1] : null;
+}
+// BeyondATC's VFR/IFR phraseology is built against 3 modeled regions (US/UK/
+// Australia, per wiki.beyondatc.net/vfr/setting-up/), but that region is a
+// manual pilot setting at flight setup, NOT logged anywhere in Player.log -
+// confirmed 2026-08-26, grepped the full raw text of a real log for
+// "region"/"ruleset"/"jurisdiction", zero matches. So this can only guess the
+// real-world country from the departure airport's ICAO prefix, which is a
+// different thing from "which ruleset BeyondATC actually applied" - a pilot
+// can select any region regardless of where they're actually flying. Purely
+// a caution flag for reviewing someone else's log in unfamiliar territory,
+// never treated as a confirmed fact elsewhere in this file.
+function guessRegionFromAirport(icao){
+  if(!icao) return null;
+  if(/^K/.test(icao)) return 'US';
+  if(/^PA/.test(icao)) return 'US'; // Alaska
+  if(/^PH/.test(icao)) return 'US'; // Hawaii
+  if(/^EG/.test(icao)) return 'UK';
+  if(/^Y/.test(icao)) return 'AU';
+  return 'unmodeled';
 }
 // Distinguishes the real player's own push-to-talk (speechTranscription:true,
 // set in parseLegLines from the [Speech Transcription] AI Processed pipeline
@@ -1932,7 +2212,15 @@ function evaluateExchange(ex, cfg){
         // start yet, so a flat altitude there is expected, not a stall.
         const altSpreadWin = altWin.filter(s => s.lineIndex >= progressStart.lineIndex);
         const flatRange = altSpreadWin.length ? Math.max(...altSpreadWin.map(s=>s.alt)) - Math.min(...altSpreadWin.map(s=>s.alt)) : 0;
-        const sustainedNonProgress = !altLiftoffPending && altSpreadWin.length >= 2 && flatRange <= cfg.altTol;
+        // spreadElapsed >= 1 mirrors the HDG sustainedNonProgress fix above
+        // (2026-08-23) - without it, 2+ confirming samples landing in the
+        // same one-minute PlayerState timestamp (physically implausible for
+        // a real climb/descent to show up) would grade identically to a
+        // genuine multi-sample stall like AAL3264's. This was flagged as a
+        // known parallel bug when the HDG side was fixed, not yet fixed
+        // there until now - see atc-compliance-debugger.NOTES.md.
+        const altSpreadElapsed = altSpreadWin.length ? altSpreadWin[altSpreadWin.length-1].timeMin - altSpreadWin[0].timeMin : 0;
+        const sustainedNonProgress = !altLiftoffPending && altSpreadWin.length >= 2 && flatRange <= cfg.altTol && altSpreadElapsed >= 1;
         // A never-superseded clearance falls straight to a hard 'bad' below
         // by default - correct when there was plenty of time to comply and
         // it never happened, but wrong when the window (and the log/leg
@@ -2183,9 +2471,68 @@ function evaluateExchange(ex, cfg){
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetLabel} — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
-        const status = ex.spdSuperseded ? 'warn' : 'bad';
+        // "Superseded" alone isn't a fair-chance signal if the aircraft spent
+        // the whole window moving AWAY from the target (not just "hadn't
+        // arrived yet") - that's clear non-compliance, and deliberately
+        // checked regardless of which of the three spdSupersededBy reasons
+        // closed the window (a new number, a landing clearance, or an
+        // explicit cancellation) rather than singling out 'canceled' - the
+        // wrong-direction signal itself is what disqualifies the softening,
+        // not the specific reason the window ended. Verified against a real
+        // user-reported log, now a frozen fixture + regression assertion:
+        // tests/fixtures/User Purposely Did Not Follow Speed Instructions.log
+        // (assigned 200kt, speed dropped 160->130kt over 3 minutes, then ATC
+        // canceled with "resume normal speed" - reads as ATC giving up on an
+        // ignored instruction, not changing its mind before a fair chance to
+        // comply). See BACKLOG_ARCHIVE.md's matching entry for the full
+        // investigation and atc-compliance-debugger.NOTES.md for the story.
+        const regressed = startState && (
+          (action==='reduce' && finalSpd.spd > startState.spd + cfg.spdTol) ||
+          (action==='increase' && finalSpd.spd < startState.spd - cfg.spdTol) ||
+          (action==='maintain' && Math.abs(finalSpd.spd - targetKt) > Math.abs(startState.spd - targetKt) + cfg.spdTol)
+        );
+        const status = (ex.spdSuperseded && !regressed) ? 'warn' : 'bad';
         results.push({type:'SPD', status, label, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}});
       }
+    }
+  }
+
+  // ---- SQUAWK ----
+  // Assigned-vs-actual, mirroring SPD above but simplified: a squawk code
+  // is a discrete match, not a converging numeric quantity, so there's no
+  // direction/tolerance/drift-scan machinery here - once set correctly
+  // there's no real-log evidence a pilot ever changes it again mid-window.
+  // See Design Docs/squawk-assigned-vs-actual-check.md.
+  // Ground-issued clearance timing gotcha (found live, verifying against
+  // the sample library): a squawk assigned as part of a gate clearance is
+  // routinely dialed in near taxi/takeoff, not the instant it's read back -
+  // same "gate hold isn't a stalled response" reasoning already applied to
+  // ALT/HDG ground clearances elsewhere in this function (see isOnGround
+  // above). Unlike ALT (where compliedAt realistically can't be found until
+  // the aircraft is near the target altitude, essentially always after
+  // liftoff), a squawk code has no altitude-linked floor - dialing it in
+  // while still taxiing, well before liftoff, is completely normal. So
+  // there's no meaningful "delay" concept for anything set during the
+  // ground phase at all: any pre-liftoff compliance reads as 0 delay
+  // (fully fine, not worth timing), and only genuine post-liftoff lateness
+  // gets measured and can trigger 'warn'.
+  if(ex.clearance.squawk){
+    const targetCode = ex.clearance.squawk.code;
+    const compliedAt = ex.squawkWindowStates.find(s => parseSquawk(s) === targetCode);
+    if(compliedAt){
+      const liftoffState = isOnGround(startState) ? firstAirborneState(ex.squawkWindowStates, startState) : null;
+      let delay;
+      if(isOnGround(startState)){
+        delay = (liftoffState && compliedAt.timeMin > liftoffState.timeMin) ? compliedAt.timeMin - liftoffState.timeMin : 0;
+      } else {
+        delay = startState ? compliedAt.timeMin - startState.timeMin : null;
+      }
+      const slow = delay!=null && delay > cfg.responseDelayMax;
+      const note = delay!=null ? ` in ~${delay}m` : '';
+      results.push({type:'SQUAWK', status: slow?'warn':'ok', label:`Squawk ${targetCode} — set${note}`});
+    } else if(ex.squawkWindowStates.length){
+      const actual = parseSquawk(ex.squawkWindowStates[ex.squawkWindowStates.length-1]) || 'unknown';
+      results.push({type:'SQUAWK', status:'bad', label:`Squawk ${targetCode} assigned — never set (last observed: ${actual})`});
     }
   }
 
@@ -2819,6 +3166,23 @@ function refineSpeakersByCallsign(events, callsign){
   // callsign-adjacent phrasing is always either a sign-off ("good day.",
   // "take care.") or nothing, never "passing"/"leaving"/etc.
   const posReportRe = new RegExp(esc+'\\s*,\\s*(passing|leaving|climbing|descending|through|out of|crossing)\\b', 'i');
+  // Sibling to posReportRe above, for the verb-LESS variant of the same
+  // check-in report ("Seattle Center, Frontier Flight 4204, FL350." - no
+  // "passing"/"leaving"/etc, just a bare altitude, optionally with a
+  // greeting in between). Text shape alone was not trusted on its own here,
+  // unlike posReportRe's verbed version - see the `checkInVerified` comment
+  // in parseLegLines for why (in short: many apparent "real ATC" examples
+  // of this bare shape turned out, on individual tracing, to be this same
+  // pre-existing misclassification bug rather than genuine ATC phraseology,
+  // but that check wasn't exhaustive across the whole library, so the tag
+  // requirement stays as a deliberate extra safety margin). Requires BOTH
+  // this shape match AND the `checkInVerified` tag before being trusted
+  // below - the tag alone over-matches unrelated nearby events in a busy
+  // exchange sequence (found live: without this shape gate, the tag alone
+  // flipped ~20 already-correctly-classified
+  // events per leg in `Player - ATC forgot me.log` via coincidental
+  // proximity to someone else's check-in script, not their own).
+  const bareAltCheckInRe = new RegExp(esc+'\\s*,\\s*(good\\s+(morning|afternoon|evening|day)\\s*,\\s*)?(FL\\s?\\d{2,3}|\\d{1,3},?\\d{3}(\\s*feet)?)\\s*[.!]?\\s*$', 'i');
   // Pilot acknowledgment readbacks that open with crew-only vocabulary
   // ("We'll...", "Wilco, ...", "Roger, we'll...") instead of trailing with
   // the callsign the way a normal readback does - e.g. "We'll contact
@@ -2898,6 +3262,12 @@ function refineSpeakersByCallsign(events, callsign){
     else if(pilotAckRe.test(t)) e.speaker = 'PILOT';
     else if(ctafRe.test(t)) e.speaker = 'PILOT';
     else if(arrivalCheckInRe.test(t)) e.speaker = 'PILOT';
+    // Fallback for the bare/greeting-only altitude check-in shape - requires
+    // BOTH the shape match AND the ControllerScript-derived confirmation tag
+    // (see bareAltCheckInRe's own comment above for why neither is safe
+    // alone), and only reachable when nothing above already resolved this
+    // event, so it never overrides a more specific rule.
+    else if(e.checkInVerified && bareAltCheckInRe.test(t)) e.speaker = 'PILOT';
   });
 }
 
@@ -3070,6 +3440,14 @@ function loadLeg(idx){
   document.getElementById('hCallsign').innerHTML = `<span class="dot">●</span> ${callsign}`;
   const m = PARSED.meta;
   const routeParts = [];
+  if(m.flightRules) routeParts.push(`${m.flightRules.toUpperCase()}`);
+  const guessedRegion = guessRegionFromAirport(m.orig) || guessRegionFromAirport(m.dest);
+  if(guessedRegion){
+    const fromIcao = m.orig || m.dest;
+    routeParts.push(guessedRegion==='unmodeled'
+      ? `<span title="Guessed from ${fromIcao}'s country - BeyondATC's actual region setting isn't logged. Its VFR feature only models US/UK/Australia phraseology, so treat compliance judgments here with extra caution.">apparent region: unmodeled (${fromIcao})</span>`
+      : `<span title="Guessed from ${fromIcao}'s country - BeyondATC's actual region setting isn't logged, this is inferred from airport location only.">apparent region: ${guessedRegion} (${fromIcao})</span>`);
+  }
   if(m.orig && m.dest) routeParts.push(`${m.orig} <b>${m.origrwy?('rwy '+m.origrwy+' '):''}</b>→ ${m.dest} <b>${m.destrwy?('rwy '+m.destrwy):''}</b>`);
   if(m.actype) routeParts.push(`${m.actype}`);
   if(m.cruiseAlt) routeParts.push(`FL${Math.round(m.cruiseAlt/100)}`);
@@ -3222,6 +3600,7 @@ function buildFilterBar(){
     {key:'ALT', label:'Altitude'},
     {key:'SPD', label:'Speed'},
     {key:'V/S', label:'Vertical speed'},
+    {key:'SQUAWK', label:'Squawk'},
     {key:'RESP', label:'Response delay'},
   ];
   bar.innerHTML='';
@@ -3316,7 +3695,16 @@ function linearBarSvg({target, actual, status, unit, tol, actualLabel='actual'})
 function renderStrip(ex){
   const overall = ex.eval.overall;
   const cls = overall==='ok'?'status-ok':overall==='warn'?'status-warn':overall==='bad'?'status-bad':'';
-  const badges = ex.eval.results.map(r=>`<span class="badge ${r.status}">${statusIcon(r.status)} ${r.label}</span>`).join('');
+  let badges = ex.eval.results.map(r=>`<span class="badge ${r.status}">${statusIcon(r.status)} ${r.label}</span>`).join('');
+  // Tuned-frequency confirmation - VFR-only per the user's explicit ask
+  // (2026-08-25): an IFR flight can hop 6-10+ frequencies (Clearance/Ground/
+  // Tower/Departure/multiple Centers/Approach/Tower/Ground), so a badge on
+  // every exchange would be pure noise there, while VFR typically has 2-4
+  // stations and picking the right one is itself part of compliance. See
+  // Design Docs/vfr-ifr-frequency-indicator.md.
+  const isVfr = PARSED.meta.flightRules && PARSED.meta.flightRules.toUpperCase()==='VFR';
+  const freq = (isVfr && ex.atc.state) ? parseFreq(ex.atc.state.com1) : null;
+  if(freq) badges += `<span class="badge freq">📻 ${freq}</span>`;
   // Every result carrying diagram data gets its assigned-vs-actual visual -
   // HDG renders as a compass, ALT/SPD as a linear bar (see headingCompassSvg/
   // linearBarSvg). A single exchange can carry more than one diagram-bearing

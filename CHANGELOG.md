@@ -4,6 +4,17 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.6.0] - 2026-08-30
+
+### Added
+- A new check: ATC's "report the field in sight" request now expects a timely pilot reply ("field in sight," "we have the field"), graded through the same readback/response-timing machinery as every other instruction - previously invisible to the tool entirely, silently reading as "nothing to check" rather than a real compliance question.
+
+### Fixed
+- A speed instruction superseded by a later one (a new number, a landing clearance, or an outright cancellation like "resume normal speed") no longer gets automatically softened to a yellow warning if the aircraft was actually moving *away* from the original target when the window closed. Only a genuinely-still-progressing instruction gets the softer treatment now; a real reported case had speed dropping the wrong direction for three minutes before ATC moved on, and the tool previously showed that as a minor warning rather than the compliance failure it was.
+
+### Known limitation, documented not fixed
+- The readback-pairing mechanism (shared by every instruction that expects an acknowledgment, including the new field-in-sight check above) matches on timing, not content - it pairs whatever the pilot says next within the response window, without verifying that reply actually addresses the specific instruction. Not observed causing a false pass in any log checked so far, but noted here as a known trade-off rather than a guarantee.
+
 ## [1.5.1] - 2026-08-25
 
 ### Fixed
