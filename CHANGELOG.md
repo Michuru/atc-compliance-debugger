@@ -4,6 +4,16 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.6.1] - 2026-08-31
+
+### Fixed
+- Callsign detection: the frequency-guess fallback could only capture one leading word before the number, so a plain two-word spoken airline name with no "Flight" token (e.g. "Air Canada 831") lost its first word, same failure shape as the "Frontier Flight 4204" case fixed in 1.5.1. Once that happened, speaker detection for that flight silently degraded partway through - most of the flight still classified correctly through an unrelated fallback, but once that stopped covering for it (in the reported case, partway through the descent), every later ATC instruction fell through to "unknown speaker" and vanished from the report with no error shown. A user-supplied real log looked like the debugger had stopped mid-flight - it was actually a live, complete recording all the way to the gate; only the report was cut short. Fixed by allowing an optional second leading word in the callsign-guess pattern.
+- The 250kt-below-10,000ft, 200kt-Class-B, and stabilized-approach sink-rate checks had no tolerance at all - even a 1kt or 1fpm overage graded as a full violation, identical to a genuine, meaningful bust. All three now allow a small tolerance band (see the thresholds table in `SPEC.md`) before escalating from caution to violation, matching how every other numeric check in this tool already works.
+- A dormant bug in the callsign-guess fallback's own aviation-jargon exclusion filter (skipping words like "ILS"/"QNH" so they never get mistaken for a callsign) - the two-word-name fix above could, in principle, push one of those excluded words past the position the filter checked, silently defeating it. Never observed causing a wrong guess in any real log, but fixed defensively rather than left as a latent risk.
+
+### Added
+- No new checks - a permanent regression-test fixture was added for the original "Frontier Flight 4204" case (`Player (11).log`, no user-visible change), closing a gap where that precedent had no automatic protection against a future regression.
+
 ## [1.6.0] - 2026-08-30
 
 ### Added

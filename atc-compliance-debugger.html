@@ -2323,7 +2323,9 @@ function evaluateExchange(ex, cfg){
       }
     }
     if(Math.abs(mostNegativeVsFinal) > cfg.approachVsLimit){
-      results.push({type:'V/S', status:'bad', label:`Excessive sink rate on approach — reached ~${Math.round(Math.abs(mostNegativeVsFinal)).toLocaleString()}fpm descending below ${Math.round(approachAltAbs).toLocaleString()}ft (stabilized-approach limit ${cfg.approachVsLimit}fpm)`});
+      const over = Math.round(Math.abs(mostNegativeVsFinal) - cfg.approachVsLimit);
+      const status = over <= cfg.approachVsTol ? 'warn' : 'bad';
+      results.push({type:'V/S', status, label:`Excessive sink rate on approach — reached ~${Math.round(Math.abs(mostNegativeVsFinal)).toLocaleString()}fpm descending below ${Math.round(approachAltAbs).toLocaleString()}ft (stabilized-approach limit ${cfg.approachVsLimit}fpm)`});
     }
     if(Math.abs(maxAbsVsEnroute) > cfg.vsWarn){
       const status = Math.abs(maxAbsVsEnroute) > cfg.vsBad ? 'bad' : 'warn';
@@ -2373,7 +2375,19 @@ function evaluateExchange(ex, cfg){
     // above.
     if(worst250){
       const over = Math.round(worst250.spd - cfg.speedBelow10k);
-      results.push({type:'SPD', status:'bad', label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`});
+      // These two are hard regulatory caps (14 CFR 91.117), not an
+      // ATC-assigned target - unlike every other SPD/ALT/HDG check in this
+      // function, there was no tolerance applied here at all, so a 1kt
+      // overshoot (plausibly just PlayerState sampling noise, not a real
+      // pilot speed bust) graded identically to a genuine 30kt bust.
+      // Uses its own dedicated cfg.speedLimitTol (NOT cfg.spdTol, which
+      // grades drift from an assigned target - a different question with
+      // no reason to share a tuning knob with a hard legal limit's noise
+      // floor - see that field's own DEFAULT_CFG comment) as the warn/bad
+      // boundary. User-reported 2026-08-31: "251 knots" recurring across
+      // multiple real logs, always graded 'bad'.
+      const status = over <= cfg.speedLimitTol ? 'warn' : 'bad';
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`});
     }
     if(worstApp){
       const over = Math.round(worstApp.spd - cfg.approachSpeedLimit);
@@ -2381,7 +2395,10 @@ function evaluateExchange(ex, cfg){
     }
     if(worstBravo){
       const over = Math.round(worstBravo.spd - cfg.classBUnderlyingSpeedLimit);
-      results.push({type:'SPD', status:'bad', label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`});
+      // Same hard-cap-with-no-tolerance gap as the 250kt/10,000ft check
+      // above, same fix (own dedicated cfg.speedLimitTol, not cfg.spdTol).
+      const status = over <= cfg.speedLimitTol ? 'warn' : 'bad';
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`});
     }
     if(ex.clearance.landing){
       const last = win[win.length-1];
@@ -2657,6 +2674,18 @@ const DEFAULT_CFG = {
   // helicopter," not a per-category performance question (see
   // evaluateExchange's V/S section).
   approachVsLimit: {v:1000, label:'Stabilized-approach sink rate limit', unit:'fpm'},
+  // Same fix pattern as speedLimitTol above (evaluateExchange's SPD block)
+  // applied here 2026-08-31, after a code-reviewer pass flagged this check
+  // as having the identical no-tolerance-on-a-hard-limit gap: any sink rate
+  // over 1,000fpm on approach - even by a handful of fpm - graded 'bad'
+  // outright, same as a genuinely dangerous 1,400fpm descent. Not yet
+  // confirmed to misfire on a real log the way the SPD case was (see
+  // BACKLOG.md) - fixed proactively rather than waiting for a report,
+  // since the shape of the bug is now well-established in this file.
+  // Smaller than speedLimitTol's 5kt (proportionally, ~10% of the limit
+  // rather than 2%) since this is a stabilized-approach SAFETY criterion,
+  // not a pure ATC-clearance number - stays closer to zero tolerance.
+  approachVsTol: {v:100, label:'Stabilized-approach sink rate tolerance', unit:'fpm'},
   // Now directly cited (2026-08-11 JO 7110.65 skim, same pass as hdgTol/
   // altTol above): FAA JO 7110.65BB Para 5-7-2 (SPEED ADJUSTMENT), NOTE 1 -
   // "A pilot operating at or above 10,000 feet MSL on an assigned speed
@@ -2678,6 +2707,20 @@ const DEFAULT_CFG = {
   // distinction is real, not assumed.
   speedBelow10k: {v:250, label:'Speed limit below 10,000ft', unit:'kt'},
   classBUnderlyingSpeedLimit: {v:200, label:'Speed limit beneath Class B / in a VFR corridor', unit:'kt'},
+  // Deliberately separate from spdTol (above) rather than reused, despite
+  // both being "kt" - spdTol answers "how far from an ATC-ASSIGNED target
+  // still counts as compliant," a different question from "how much
+  // reading noise should a zero-legal-tolerance 14 CFR 91.117 hard limit
+  // absorb before it's worth calling 'bad' instead of 'warn'." Coupling
+  // them would mean a future spdTol retune for an unrelated assigned-speed
+  // false positive silently also changes how much real hard-limit overage
+  // gets downgraded - flagged by a code-reviewer pass 2026-08-31 while
+  // reviewing the fix that introduced this check's tolerance in the first
+  // place (see evaluateExchange's worst250/worstBravo handling). Default
+  // (5kt) is tighter than spdTol's 10kt on purpose - the motivating
+  // real-log complaint was a 1kt overage, not a 9kt one, and a hard-limit
+  // check should stay closer to zero tolerance than a target-drift check.
+  speedLimitTol: {v:5, label:'Hard speed-limit tolerance (250kt/Class B checks)', unit:'kt'},
   approachAltThreshold: {v:1000, label:'"On approach" altitude', unit:'ft AGL~'},
   approachSpeedLimit: {v:180, label:'Approach speed target', unit:'kt'},
   landingSpeedLimit: {v:160, label:'Landing-clearance speed target', unit:'kt'},
@@ -3085,9 +3128,27 @@ function guessCallsign(events, callsignHints){
   // speaker==='ATC') produced zero exchanges. Confirmed 2026-08-25 via
   // `Player (11).log` (FFT4204, PAE-KLAS) - the debugger showed no data at
   // all for a real user-supplied log, not a synthetic edge case.
+  // Also allows one optional leading capitalized word, for two-word spoken
+  // airline names ("Air Canada 831", "Virgin America 24") - without it, the
+  // match starts at the SECOND word (regex can't look further back once the
+  // digit-adjacent word is found), silently dropping the first word from
+  // the guess exactly like the "Flight" case above dropped "Frontier".
+  // Confirmed live 2026-08-31 via a real user-supplied `Player (14).log`
+  // (ACA831/"Air Canada 831", CYOW-KFLL): guessCallsign returned "Canada
+  // 831", which then broke refineSpeakersByCallsign's startRe (anchored
+  // match, so "Air Canada 831, ..." never matches "^Canada 831") for every
+  // real ATC line. Most of the flight still classified 'ATC' correctly via
+  // the LVI/sid heuristic in parseLegLines, which happens to work whenever
+  // a LocalVoiceInput tag sits within 20 lines - but the moment that
+  // coincidence stopped holding (partway through this flight's descent),
+  // every later ATC instruction silently fell through to 'UNKNOWN' and
+  // vanished from EXCHANGES with no error shown - approach vectors, the
+  // landing clearance, and the taxi-to-gate instruction were never graded
+  // for compliance, and the tool's exchange list looked like the log itself
+  // had been cut short mid-flight when it hadn't been.
   const freq = {};
   events.forEach(e=>{
-    const matches = e.text.match(/\b[A-Z][A-Za-z]*(?: Flight)? \d{1,5}[A-Z]{0,3}(?: Heavy)?\b/g);
+    const matches = e.text.match(/\b(?:[A-Z][A-Za-z]*\s)?[A-Z][A-Za-z]*(?: Flight)? \d{1,5}[A-Z]{0,3}(?: Heavy)?\b/g);
     if(matches) matches.forEach(m=>{
       // Allowing ALL-CAPS words above (not just Title-case) also widened
       // the match to real aviation jargon that isn't a callsign but shares
@@ -3099,8 +3160,15 @@ function guessCallsign(events, callsignHints){
       // working hint match - exactly the scenario this fix targets - could
       // resurrect the same wrong-guess failure mode in a different shape.
       // Excluded defensively; none of these words are ever a real
-      // airline/tail callsign.
-      if(/^(ILS|NAV|RNAV|QNH|VOR|ROMEO)\b/i.test(m)) return;
+      // airline/tail callsign. Deliberately NOT anchored to the start of
+      // the match (`^`) - the optional leading-word group added above for
+      // two-word airline names (see that comment) can push one of these
+      // excluded tokens off position 0 ("Request ILS 15R" instead of bare
+      // "ILS 15R"), which would otherwise silently defeat this whole
+      // exclusion. Confirmed by a code-reviewer pass 2026-08-31: real,
+      // currently-dormant (0/49 sample logs actually flip a guess on this),
+      // but exactly the kind of landmine this exclusion exists to prevent.
+      if(/\b(ILS|NAV|RNAV|QNH|VOR|ROMEO)\b/i.test(m)) return;
       freq[m]=(freq[m]||0)+1;
     });
   });
