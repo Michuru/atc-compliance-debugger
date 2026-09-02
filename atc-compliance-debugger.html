@@ -242,6 +242,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
         <div class="route" id="hRoute">&mdash;</div>
         <div class="route-actions" id="hRouteActions" style="display:none;"></div>
         <div class="cat-note-inline" id="hProcedures" style="display:none;"></div>
+        <div class="cat-note-inline" id="hRouteText" style="display:none;"></div>
         <div class="cat-note-inline" id="hCatNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
@@ -3454,6 +3455,21 @@ function loadLeg(idx){
   } else {
     procNote.style.display = 'none';
     procNote.innerHTML = '';
+  }
+
+  // Full SimBrief-planned route, shown as its own line under the Planned
+  // SID/STAR line - same string the Copy Route button below copies (see
+  // copyStr), requested so it's visible without needing to click Copy first.
+  const routeTextNote = document.getElementById('hRouteText');
+  if(PARSED.meta.route){
+    const fullRoute = (PARSED.meta.orig && PARSED.meta.dest)
+      ? `${PARSED.meta.orig} ${PARSED.meta.route} ${PARSED.meta.dest}`
+      : PARSED.meta.route;
+    routeTextNote.style.display = 'block';
+    routeTextNote.textContent = `Route: ${fullRoute}`;
+  } else {
+    routeTextNote.style.display = 'none';
+    routeTextNote.textContent = '';
   }
 
   PARSED.meta.fieldElevations = deriveFieldElevations(PARSED.states);
