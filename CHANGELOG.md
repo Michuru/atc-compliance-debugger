@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.7.0] - 2026-09-02
+
+### Added
+- The full SimBrief-planned route is now shown as visible text directly beneath the Planned SID/STAR line, instead of only being accessible through the existing "Copy Route" button. Requested via #1.
+
 ## [1.6.1] - 2026-08-31
 
 ### Fixed
