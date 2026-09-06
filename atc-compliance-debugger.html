@@ -1878,7 +1878,7 @@ function evaluateExchange(ex, cfg){
           results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then continued turning to ${Math.round(worstDrift.hdg)}° — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
         } else {
           const status = driftDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
-          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Reached', value:`${target}°${delay!=null?` in ~${delay}m`:''}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.hdg)}° (${driftDiff}° off)`}}});
+          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`, shortLabel:'Drifted off before the next instruction', strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Reached', value:`${target}°${delay!=null?` in ~${delay}m`:''}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.hdg)}° (${driftDiff}° off)`}}});
         }
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
@@ -1939,7 +1939,7 @@ function evaluateExchange(ex, cfg){
         // green check reads as "reached 120°" unless the real number is
         // right there too. Flagged directly by the user after reading this
         // exact label against a real log.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Aircraft now', value:`${Math.round(finalState.hdg)}°`}, cell3:{label:'Gap remaining', value:`${Math.round(finalDiff)}°, moving toward it`}}});
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, shortLabel:'', carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Aircraft now', value:`${Math.round(finalState.hdg)}°`}, cell3:{label:'Gap remaining', value:`${Math.round(finalDiff)}°, moving toward it`}}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -2021,7 +2021,7 @@ function evaluateExchange(ex, cfg){
         // it was superseded. Matches the "ended up at X°" wording the
         // approach-intercept branch above already uses for the same concept.
         const stripNote = !turnedMeaningfully ? 'no turn detected' : (status==='warn' ? 'fell short' : 'off target');
-        results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°, ${diff}° off`, diagram:{target, actual, status}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Ended at', value:`${actual}°`}, cell3:{label:'Off by', value:`${diff}°, ${stripNote}`}}});
+        results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°, ${diff}° off`, shortLabel:'', diagram:{target, actual, status}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Ended at', value:`${actual}°`}, cell3:{label:'Off by', value:`${diff}°, ${stripNote}`}}});
         }
       }
     } else {
@@ -2166,7 +2166,7 @@ function evaluateExchange(ex, cfg){
       // matches what the logic has always meant.
       const throughVerb = action==='climb' ? 'climbed through' : 'descended through';
       const bustGap = Math.round(Math.abs(finalState.alt - targetFt));
-      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — ${throughVerb} the assigned altitude`, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'bad', tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${bustGap.toLocaleString()}ft, ${throughVerb}`}}});
+      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — ${throughVerb} the assigned altitude`, shortLabel:'', diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'bad', tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${bustGap.toLocaleString()}ft, ${throughVerb}`}}});
     } else if(compliedAt){
       const delay = progressStart ? compliedAt.timeMin - progressStart.timeMin : null;
       // A big altitude change simply takes longer to fly than a small one -
@@ -2224,7 +2224,7 @@ function evaluateExchange(ex, cfg){
         const driftFt = Math.round(worstDrift.alt - targetFt);
         const status = Math.abs(driftFt) <= cfg.altTol*2 ? 'warn' : 'bad';
         const dir = driftFt > 0 ? 'climbed to' : 'descended to';
-        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Reached', value:`${targetFt.toLocaleString()}ft${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft)`}}});
+        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`, shortLabel:'Drifted off before the next instruction', strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Reached', value:`${targetFt.toLocaleString()}ft${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft)`}}});
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
         // this is a completed, already-observed climb/descent - "35,000
@@ -2336,7 +2336,7 @@ function evaluateExchange(ex, cfg){
         // while the label carried no number at all.
         const progress = altLiftoffPending ? `parked when issued, still at ${actualAltStr}ft` : progressVerb;
         const altGap = Math.round(Math.abs(targetFt - finalState.alt));
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} assigned — ${progress}, new instructions given before arriving`, carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Aircraft now', value:`${actualAltStr}ft`}, cell3:{label:'Gap remaining', value:`${altGap.toLocaleString()}ft, moving toward it`}}});
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} assigned — ${progress}, new instructions given before arriving`, shortLabel:'', carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Aircraft now', value:`${actualAltStr}ft`}, cell3:{label:'Gap remaining', value:`${altGap.toLocaleString()}ft, moving toward it`}}});
       } else {
         let label;
         if(action==='descend' && diff > cfg.altTol){
@@ -2408,7 +2408,7 @@ function evaluateExchange(ex, cfg){
           // really is the only case that earns the through-wording.
           const neverReachedGap = Math.round(Math.abs(finalState.alt - targetFt));
           const neverReachedNote = status==='warn' ? 'fell short' : 'never reached';
-          results.push({type:'ALT', status, label, diagram:{target:targetFt, actual:Math.round(finalState.alt), status, tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${neverReachedGap.toLocaleString()}ft, ${neverReachedNote}`}}});
+          results.push({type:'ALT', status, label, shortLabel:'', diagram:{target:targetFt, actual:Math.round(finalState.alt), status, tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${neverReachedGap.toLocaleString()}ft, ${neverReachedNote}`}}});
         }
       }
     }
@@ -2587,24 +2587,24 @@ function evaluateExchange(ex, cfg){
       // converge-on-a-target check family (see stateStripHtml's own
       // comment). A `strip` still tells the same at-a-glance story without
       // reopening that scoping decision.
-      results.push({type:'SPD', status, label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.speedBelow10k}kt`}, cell2:{label:'Reached', value:`${Math.round(worst250.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`, shortLabel:`${cfg.speedBelow10k}kt limit below 10,000ft`, strip:{cell1:{label:'Limit', value:`${cfg.speedBelow10k}kt`}, cell2:{label:'Reached', value:`${Math.round(worst250.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
     }
     if(worstApp){
       const over = Math.round(worstApp.spd - cfg.approachSpeedLimit);
-      results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.approachSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstApp.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+      results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`, shortLabel:`Approach speed target below ${Math.round(approachAltAbs).toLocaleString()}ft`, strip:{cell1:{label:'Limit', value:`${cfg.approachSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstApp.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
     }
     if(worstBravo){
       const over = Math.round(worstBravo.spd - cfg.classBUnderlyingSpeedLimit);
       // Same hard-cap-with-no-tolerance gap as the 250kt/10,000ft check
       // above, same fix (own dedicated cfg.speedLimitTol, not cfg.spdTol).
       const status = over <= cfg.speedLimitTol ? 'warn' : 'bad';
-      results.push({type:'SPD', status, label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.classBUnderlyingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstBravo.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`, shortLabel:`Class B underlying speed limit (14 CFR 91.117(c))`, strip:{cell1:{label:'Limit', value:`${cfg.classBUnderlyingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstBravo.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
     }
     if(ex.clearance.landing){
       const last = win[win.length-1];
       if(last && last.spd > cfg.landingSpeedLimit){
         const over = Math.round(last.spd - cfg.landingSpeedLimit);
-        results.push({type:'SPD', status:'warn', label:`Landing speed target ≤${cfg.landingSpeedLimit}kt — reached ${Math.round(last.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.landingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(last.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+        results.push({type:'SPD', status:'warn', label:`Landing speed target ≤${cfg.landingSpeedLimit}kt — reached ${Math.round(last.spd)}kt (+${over}kt over)`, shortLabel:'Landing speed target', strip:{cell1:{label:'Limit', value:`${cfg.landingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(last.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
       }
     }
   }
@@ -2663,7 +2663,7 @@ function evaluateExchange(ex, cfg){
         const driftKt = Math.round(worstDrift.spd - targetKt);
         const status = Math.abs(driftKt) <= cfg.spdTol*2 ? 'warn' : 'bad';
         const dir = driftKt > 0 ? 'sped up to' : 'slowed to';
-        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Reached', value:`${targetKt}kt${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt)`}}});
+        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`, shortLabel:'Drifted off before the next instruction', strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Reached', value:`${targetKt}kt${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt)`}}});
       } else {
         results.push({type:'SPD', status: responseStatus, label:`SPD ${targetLabel} — reached${note}`});
       }
@@ -2724,7 +2724,7 @@ function evaluateExchange(ex, cfg){
         const actualSpdVal = Math.round(finalSpd.spd);
         const progressVerb = finalSpd.spd > startState.spd ? `still speeding up, now at ${actualSpdVal}kt` : `still slowing, now at ${actualSpdVal}kt`;
         const spdGap = Math.round(Math.abs(targetKt - finalSpd.spd));
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} assigned — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Aircraft now', value:`${actualSpdVal}kt`}, cell3:{label:'Gap remaining', value:`${spdGap}kt, moving toward it`}}});
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} assigned — ${progressVerb}, new instructions given before arriving`, shortLabel:'', carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Aircraft now', value:`${actualSpdVal}kt`}, cell3:{label:'Gap remaining', value:`${spdGap}kt, moving toward it`}}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetLabel} — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
@@ -2750,7 +2750,7 @@ function evaluateExchange(ex, cfg){
         );
         const status = (ex.spdSuperseded && !regressed) ? 'warn' : 'bad';
         const spdNote = status==='warn' ? 'fell short' : 'never reached';
-        results.push({type:'SPD', status, label, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Ended at', value:`${Math.round(finalSpd.spd)}kt`}, cell3:{label:'Off by', value:`${Math.abs(diff)}kt, ${spdNote}`}}});
+        results.push({type:'SPD', status, label, shortLabel:'', diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Ended at', value:`${Math.round(finalSpd.spd)}kt`}, cell3:{label:'Off by', value:`${Math.abs(diff)}kt, ${spdNote}`}}});
       }
     }
   }
@@ -3301,7 +3301,7 @@ function recompute(){
         const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
         supersedingEx.eval.results.push({
           type:'ALT', status:'ok',
-          label:`New instructions given before the aircraft reached the earlier ALT ${r.carryover.targetFt.toLocaleString()} clearance${issuedAt?` (issued ${issuedAt})`:''}`
+          label:`ATC assigned new ALT before reaching ${r.carryover.targetFt.toLocaleString()}ft${issuedAt?` (issued ${issuedAt})`:''}`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
@@ -3311,7 +3311,7 @@ function recompute(){
         const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
         supersedingEx.eval.results.push({
           type:'HDG', status:'ok',
-          label:`New instructions given before the aircraft reached the earlier HDG ${r.carryover.targetHdg}° clearance${issuedAt?` (issued ${issuedAt})`:''}`
+          label:`ATC assigned new HDG before reaching ${r.carryover.targetHdg}°${issuedAt?` (issued ${issuedAt})`:''}`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
@@ -3322,7 +3322,7 @@ function recompute(){
         const targetLabel = r.carryover.implied ? `${r.carryover.targetKt}kt minimum approach speed` : `${r.carryover.targetKt}kt`;
         supersedingEx.eval.results.push({
           type:'SPD', status:'ok',
-          label:`New instructions given before the aircraft reached the earlier SPD ${targetLabel} clearance${issuedAt?` (issued ${issuedAt})`:''}`
+          label:`ATC assigned new SPD before reaching ${targetLabel}${issuedAt?` (issued ${issuedAt})`:''}`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
@@ -4076,7 +4076,14 @@ function stateStripHtml({cell1, cell2, cell3}, status){
 function renderStrip(ex){
   const overall = ex.eval.overall;
   const cls = overall==='ok'?'status-ok':overall==='warn'?'status-warn':overall==='bad'?'status-bad':'';
-  let badges = ex.eval.results.map(r=>`<span class="badge ${r.status}">${statusIcon(r.status)} ${r.label}</span>`).join('');
+  // `shortLabel` (only ever set alongside `strip`) overrides the badge text
+  // without touching `label` itself - `label` stays exactly what it always
+  // was (tests, tooltips, anything else keying off it are untouched), this
+  // only changes what's DISPLAYED once a strip already shows the same
+  // numbers. undefined falls back to the full label (every non-strip
+  // result, unaffected); an empty string suppresses the badge entirely
+  // (the strip alone says everything it used to say).
+  let badges = ex.eval.results.filter(r => (r.shortLabel ?? r.label) !== '').map(r=>`<span class="badge ${r.status}">${statusIcon(r.status)} ${r.shortLabel ?? r.label}</span>`).join('');
   // Tuned-frequency confirmation - VFR-only per the user's explicit ask
   // (2026-08-25): an IFR flight can hop 6-10+ frequencies (Clearance/Ground/
   // Tower/Departure/multiple Centers/Approach/Tower/Ground), so a badge on
