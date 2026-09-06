@@ -4,6 +4,12 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.8.1] - 2026-09-06
+
+### Fixed
+- The v1.8.0 state-strip readout landed alongside the prose badges it was meant to replace, so a card temporarily showed the same assigned/actual/gap numbers twice — once in the strip, once again restated in text immediately below it. Badges are now suppressed entirely wherever the strip already tells the full story (carryover, ended-at/never-reached, altitude-through cases), or shortened to just the one piece of context the strip can't show (e.g. "Drifted off before the next instruction," or which specific flat speed limit fired).
+- The "New instructions given before the aircraft reached the earlier X clearance" note (shown on the instruction that interrupted an in-progress one) is now "ATC assigned new HDG/ALT/SPD before reaching X (issued Y)" — same information, ATC stated as the active subject.
+
 ## [1.8.0] - 2026-09-06
 
 ### Added
