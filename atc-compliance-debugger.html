@@ -200,6 +200,16 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .badge.ok{border-color:var(--green-dim);color:var(--green);background:rgba(61,220,145,0.06);}
 .badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,182,72,0.06);}
 .badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,92,108,0.08);}
+.state-strip{display:flex;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:8px;background:var(--panel-2);}
+.state-strip.warn{border-color:var(--amber-dim);}
+.state-strip.bad{border-color:var(--red-dim);}
+.state-cell{flex:1;padding:6px 10px;border-right:1px solid var(--line);}
+.state-cell:last-child{border-right:none;}
+.state-cell .lbl{font-size:9px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;}
+.state-cell .val{font-family:'Space Grotesk',sans-serif;font-size:14.5px;font-weight:700;color:var(--text);}
+.state-strip.ok .state-cell:last-child .val{color:var(--green);}
+.state-strip.warn .state-cell:last-child .val{color:var(--amber);}
+.state-strip.bad .state-cell:last-child .val{color:var(--red);}
 .strip-chevron{color:var(--text-dimmer);font-size:12px;flex-shrink:0;transition:transform .15s;}
 .strip.open .strip-chevron{transform:rotate(90deg);}
 .strip-detail{display:none;padding:0 16px 16px 16px;border-top:1px solid var(--line);margin-top:0;}
@@ -1009,8 +1019,15 @@ function parseHeadingClearance(text){
 // not just unevaluated (see evaluateExchange's SPD section), completely
 // invisible to the parser, with `clearance.speed` staying null and zero
 // eval results produced for the exchange at all.
+// "maintain" also needs its own optional "speed" the same way reduce/
+// increase already have theirs baked in - confirmed against `Player -
+// speed restrictions.log`'s real "maintain speed 250 kts."/"maintain speed
+// 240 kts."/"maintain speed 230 kts." sequence, which the bare "maintain"
+// alternative couldn't match (it only allowed an optional "to", not
+// "speed", between the verb and the number) - same invisible-to-the-parser
+// failure as the three counts above, just for the 'maintain' verb.
 function parseSpeedClearance(text){
-  const m = text.match(/(reduce speed|increase speed|slow to|maintain)(?:\s+to)?\s*(\d{2,3})\s*(?:knots?|kts?)\b/i);
+  const m = text.match(/(reduce speed|increase speed|slow to|maintain(?:\s+speed)?)(?:\s+to)?\s*(\d{2,3})\s*(?:knots?|kts?)\b/i);
   if(m){
     const verb = m[1].toLowerCase();
     const action = verb.startsWith('increase') ? 'increase' : (verb.startsWith('reduce') || verb==='slow to') ? 'reduce' : 'maintain';
@@ -1175,6 +1192,21 @@ function hasFrequencyMention(text){
   return /\b1[123]\d\.\d{1,3}\b/.test(text) || /(?<!radar\s)\bcontact\b/i.test(text) || /\bfrequency\s+change\b/i.test(text);
 }
 
+// A pure conversational courtesy reply with no instructional content of its
+// own - "You're welcome"/"You're very welcome[. Have a great flight!]" - is
+// always ATC's own sign-off to a pilot's "thank you" in this log format,
+// never something the pilot needs to acknowledge. Before this, buildExchanges
+// searched forward from every ATC event for "the next PILOT event" and
+// treated it as this line's readback regardless of content, so a filler line
+// like this got paired with whatever the pilot said next - often an
+// unrelated, independent transmission minutes later (e.g. "You're very
+// welcome." paired with a request for pushback issued 9 minutes on) -
+// producing a spurious "Readback delayed" RESP finding for a line that never
+// called for a response at all. Audited the full Player Log Samples/ library
+// first: every real instance of this phrase is ATC, always with zero
+// clearance content (hasTarget stays false either way), so skipping the
+// readback search entirely for it is safe.
+const RE_ATC_COURTESY_FILLER = /\byou'?re (?:very )?welcome\b/i;
 function buildExchanges(parsed){
   const { events, states, meta } = parsed;
   const callsigns = meta.playerCallsigns || [];
@@ -1188,7 +1220,7 @@ function buildExchanges(parsed){
     // find readback: next event(s) up to 4 ahead that is PILOT, before another ATC event
     let readback = null;
     const atcHandedOffFreq = hasFrequencyMention(atc.text);
-    for(let j=gi+1;j<events.length && j<=gi+4;j++){
+    for(let j=gi+1;j<events.length && j<=gi+4 && !RE_ATC_COURTESY_FILLER.test(atc.text);j++){
       if(events[j].speaker==='ATC') break;
       if(events[j].speaker==='PILOT'){
         // A facility-leading call-up closes the search UNLESS this
@@ -1467,6 +1499,22 @@ function pilotLabel(ev){
 function headingDiff(a,b){
   let d = Math.abs(a-b)%360;
   return d>180 ? 360-d : d;
+}
+
+// The angular distance from `from` to `to`, measured going strictly in the
+// given rotational sense ('right' = clockwise/increasing, 'left' =
+// counter-clockwise/decreasing) - unlike headingDiff, this is NOT symmetric
+// and can be up to 360, not capped at 180. Exists because an ATC-assigned
+// turn direction picks a specific arc for real reasons (traffic separation,
+// procedure) - a pilot who turns the opposite way can shrink the plain
+// symmetric gap to the target just as fast (often faster, via the shorter
+// arc) while actually turning the wrong way, which headingDiff alone cannot
+// distinguish. Mirrors ALT/SPD's startedOnExpectedSide guard, generalized to
+// circular heading space (structural-audit finding, see
+// .claude/audit-ledger/atc-compliance-debugger.json).
+function angularGapInDirection(from, to, direction){
+  const clockwise = ((to - from) % 360 + 360) % 360;
+  return direction === 'right' ? clockwise : (360 - clockwise) % 360;
 }
 
 // True if the aircraft was stationary (parked/holding) when this state was
@@ -1830,7 +1878,7 @@ function evaluateExchange(ex, cfg){
           results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then continued turning to ${Math.round(worstDrift.hdg)}° — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
         } else {
           const status = driftDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
-          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
+          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Reached', value:`${target}°${delay!=null?` in ~${delay}m`:''}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.hdg)}° (${driftDiff}° off)`}}});
         }
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
@@ -1847,7 +1895,36 @@ function evaluateExchange(ex, cfg){
       // "fly heading X" / "leave FIX heading X" clearance carries no
       // direction at all (parseHeadingClearance).
       const startDiff = hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target) : null;
-      const progressing = startDiff!=null && finalDiff < startDiff - cfg.hdgTol;
+      // A shrunk gap alone isn't enough - natural heading wander during
+      // level flight (a few degrees of drift over many minutes, no real
+      // turn at all) can numerically "close the gap" on a huge assigned
+      // turn just as readily as a real one. Require the reduction to be a
+      // real fraction of what the turn actually needed, not just >hdgTol.
+      // Confirmed against a real log ("Player bad vector.log"): a
+      // 158°-away HDG 215 clearance was credited "still turning toward
+      // it" off a 12° drift (57°->69° over 21 minutes, ~8% of the
+      // assigned turn) while three earlier re-vectors in the same window
+      // went completely unanswered - the aircraft never meaningfully
+      // turned at all after the first of the four.
+      const reduction = startDiff!=null ? startDiff - finalDiff : null;
+      // A "turn left/right, heading X" clearance DOES carry an assigned
+      // direction (unlike "fly heading X"/"leave FIX heading X" - see
+      // parseHeadingClearance), and that direction must gate progress the
+      // same way ALT/SPD's startedOnExpectedSide gates theirs - added
+      // per a structural-audit finding (.claude/audit-ledger/
+      // atc-compliance-debugger.json): a wrong-direction turn can shrink
+      // the plain symmetric gap just as fast as a compliant one (often
+      // faster, via the shorter arc), which the reduction/startDiff check
+      // above cannot by itself tell apart from real compliance. Unconfirmed
+      // against a real log - added preventively, same standing the SPD
+      // guard had when it was added.
+      const direction = ex.clearance.heading.direction;
+      const directionalGap = (direction && hdgProgressStart) ? angularGapInDirection(hdgProgressStart.hdg, target, direction) : null;
+      const directionalFinalGap = (direction && finalState) ? angularGapInDirection(finalState.hdg, target, direction) : null;
+      const directionalReduction = (directionalGap!=null && directionalFinalGap!=null) ? directionalGap - directionalFinalGap : null;
+      const progressing = direction
+        ? (directionalReduction!=null && directionalReduction > cfg.hdgTol && directionalReduction >= directionalGap * 0.2)
+        : (reduction!=null && reduction > cfg.hdgTol && reduction >= startDiff * 0.2);
       if(ex.hdgSuperseded && progressing){
         // Not a violation: ATC issued a new heading before this one was
         // reached, and the aircraft was correctly turning that way. The
@@ -1856,7 +1933,13 @@ function evaluateExchange(ex, cfg){
         // readback - carried over separately (see the recompute() pass
         // below) and surfaced on the superseding exchange instead, same
         // pattern as the ALT carryover above.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° — still turning toward it, new instructions given before arriving`, carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}});
+        // Names the actual heading reached, not just the assigned target -
+        // the collapsed one-line summary is all a user sees without
+        // expanding to the compass detail view, and "HDG 120°" next to a
+        // green check reads as "reached 120°" unless the real number is
+        // right there too. Flagged directly by the user after reading this
+        // exact label against a real log.
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Aircraft now', value:`${Math.round(finalState.hdg)}°`}, cell3:{label:'Gap remaining', value:`${Math.round(finalDiff)}°, moving toward it`}}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -1932,7 +2015,13 @@ function evaluateExchange(ex, cfg){
         // the reader has to mentally diff. diagram data drives the compass
         // visual rendered in the strip detail view (renderStrip/
         // headingCompassBlock).
-        results.push({type:'HDG', status, label:`Assigned ${target}° — current heading ${actual}° instead, ${diff}° off`, diagram:{target, actual, status}});
+        // "ended at X°", not "current heading X° instead" - the latter reads
+        // as "right now," but `actual` is the last observed sample before
+        // this clearance's window closed, which can be well before "now" if
+        // it was superseded. Matches the "ended up at X°" wording the
+        // approach-intercept branch above already uses for the same concept.
+        const stripNote = !turnedMeaningfully ? 'no turn detected' : (status==='warn' ? 'fell short' : 'off target');
+        results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°, ${diff}° off`, diagram:{target, actual, status}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Ended at', value:`${actual}°`}, cell3:{label:'Off by', value:`${diff}°, ${stripNote}`}}});
         }
       }
     } else {
@@ -2067,7 +2156,17 @@ function evaluateExchange(ex, cfg){
     const altLiftoffPending = isOnGround(startState) && !liftoffState;
     const progressStart = isOnGround(startState) ? (liftoffState || startState) : startState;
     if(bust){
-      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — overshot / busted altitude`, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'bad', tol:cfg.altTol}});
+      // "Busted" read as ambiguous about direction (blackjack-style "over"
+      // only) - replaced with FAA JO 7110.65's own phrasing ("passes through
+      // the assigned altitude"), verb-matched to the actual climb/descend
+      // clearance so it's never ambiguous which way the aircraft went
+      // through it. Pure wording change - the `bust` condition above is
+      // already direction-strict (only fires when the aircraft crossed the
+      // target in the direction of travel), so this label now finally
+      // matches what the logic has always meant.
+      const throughVerb = action==='climb' ? 'climbed through' : 'descended through';
+      const bustGap = Math.round(Math.abs(finalState.alt - targetFt));
+      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — ${throughVerb} the assigned altitude`, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'bad', tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${bustGap.toLocaleString()}ft, ${throughVerb}`}}});
     } else if(compliedAt){
       const delay = progressStart ? compliedAt.timeMin - progressStart.timeMin : null;
       // A big altitude change simply takes longer to fly than a small one -
@@ -2125,7 +2224,7 @@ function evaluateExchange(ex, cfg){
         const driftFt = Math.round(worstDrift.alt - targetFt);
         const status = Math.abs(driftFt) <= cfg.altTol*2 ? 'warn' : 'bad';
         const dir = driftFt > 0 ? 'climbed to' : 'descended to';
-        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`});
+        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Reached', value:`${targetFt.toLocaleString()}ft${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft)`}}});
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
         // this is a completed, already-observed climb/descent - "35,000
@@ -2140,10 +2239,46 @@ function evaluateExchange(ex, cfg){
       // A bare "maintain X" (e.g. "then as filed, maintain 5,000" in a gate
       // SID clearance) doesn't say climb or descend, so judge it by
       // whether the gap to the target closed, not by direction.
+      // climb/descend also need the "shrunk gap alone isn't enough" fix,
+      // not just 'maintain' - checking real directional movement is not
+      // the same as checking ENOUGH of it happened. A "descend and
+      // maintain 3,000" issued at 10,000ft (7,000ft needed) previously
+      // credited "still descending, new instructions given before
+      // arriving" off a mere 200ft nudge - barely 3% of the assigned
+      // descent - because the old check only asked "did it move more than
+      // altTol in the right direction," with nothing checked against the
+      // target at all. Caught by an independent cross-model review of this
+      // exact fix pattern (see the HDG/ALT-maintain/SPD commits above);
+      // this closes the one instance that review had wrongly cleared as
+      // "structurally stronger, not obviously subject to the same
+      // false-positive class."
+      const directionalGap = (action==='descend' || action==='climb') && progressStart ? Math.abs(progressStart.alt - targetFt) : null;
+      const directionalReduction = directionalGap!=null
+        ? (action==='descend' ? progressStart.alt - finalState.alt : finalState.alt - progressStart.alt)
+        : null;
+      // progressStart is a stale/pre-instruction sample the same way SPD's
+      // startState is (both are "most recent state before the ATC line,"
+      // not itself part of the window the bust check above scans) - so a
+      // descend/climb clearance only counts as making directional progress
+      // if progressStart genuinely started on the correct side of the
+      // target by more than tolerance. The bust check above only catches a
+      // GROSS wrong-side deviation (past 2x altTol) via the real flown
+      // samples in altWin; it doesn't validate progressStart itself, so a
+      // stale anchor reading wrong-side by between 1x and 2x altTol was
+      // still exposed here. Same guard as the SPD reduce/increase fix,
+      // applied for consistency once an independent review found the
+      // asymmetry wasn't fully justified.
+      const startedOnExpectedSide = directionalGap!=null && (
+        action==='descend' ? progressStart.alt > targetFt + cfg.altTol : progressStart.alt < targetFt - cfg.altTol
+      );
+      // 'maintain' has no assigned direction to check against (unlike
+      // climb/descend above), so judge it by whether the gap to the target
+      // closed, not by direction - same fix, same 20% floor.
+      const maintainStartGap = (action==='maintain' && progressStart) ? Math.abs(progressStart.alt - targetFt) : null;
+      const maintainReduction = maintainStartGap!=null ? maintainStartGap - Math.abs(finalState.alt - targetFt) : null;
       const progressing = progressStart && (
-        (action==='descend' && finalState.alt < progressStart.alt - cfg.altTol) ||
-        (action==='climb'   && finalState.alt > progressStart.alt + cfg.altTol) ||
-        (action==='maintain' && Math.abs(finalState.alt - targetFt) < Math.abs(progressStart.alt - targetFt) - cfg.altTol)
+        ((action==='descend' || action==='climb') && startedOnExpectedSide && directionalReduction!=null && directionalReduction > cfg.altTol && directionalReduction >= directionalGap * 0.2) ||
+        (action==='maintain' && maintainReduction!=null && maintainReduction > cfg.altTol && maintainReduction >= maintainStartGap * 0.2)
       );
       if(pointRestriction){
         // A "cross FIX at/above/below ALTITUDE" restriction only matters
@@ -2184,9 +2319,24 @@ function evaluateExchange(ex, cfg){
         // neither climb nor descend, but the aircraft's real trajectory
         // always has one, so this is accurate for all three action types
         // and no longer needs a direction-neutral fallback for 'maintain'.
-        const progressVerb = finalState.alt > progressStart.alt ? 'still ascending' : 'still descending';
-        const progress = isOnGround(startState) ? 'parked when issued' : progressVerb;
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — ${progress}, new instructions given before arriving`, carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}});
+        // Same label-clarity fix as the HDG "still turning toward it" case
+        // above - names the actual altitude reached, not just the
+        // assigned target, so the collapsed summary can't read as "reached
+        // 11,000ft" when it means "assigned 11,000ft, got partway there."
+        const actualAltStr = Math.round(finalState.alt).toLocaleString();
+        const progressVerb = finalState.alt > progressStart.alt ? `still ascending, now at ${actualAltStr}ft` : `still descending, now at ${actualAltStr}ft`;
+        // altLiftoffPending (still parked/taxiing for this WHOLE window), not
+        // isOnGround(startState) (was on the ground only at the instant the
+        // clearance was issued) - a clearance issued at the gate but
+        // superseded after real liftoff and climb must not say "parked when
+        // issued, still at 3,000ft", which is self-contradictory. Caught by
+        // an independent code-reviewer pass on the label-wording fix above:
+        // adding the real altitude number to this branch newly exposed a
+        // pre-existing mismatch that was merely vague, not visibly wrong,
+        // while the label carried no number at all.
+        const progress = altLiftoffPending ? `parked when issued, still at ${actualAltStr}ft` : progressVerb;
+        const altGap = Math.round(Math.abs(targetFt - finalState.alt));
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} assigned — ${progress}, new instructions given before arriving`, carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Aircraft now', value:`${actualAltStr}ft`}, cell3:{label:'Gap remaining', value:`${altGap.toLocaleString()}ft, moving toward it`}}});
       } else {
         let label;
         if(action==='descend' && diff > cfg.altTol){
@@ -2251,7 +2401,14 @@ function evaluateExchange(ex, cfg){
           results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — instruction given shortly before the recording ended, not enough data to judge compliance`});
         } else {
           const status = ex.altSuperseded ? (sustainedNonProgress ? 'bad' : 'warn') : 'bad';
-          results.push({type:'ALT', status, label, diagram:{target:targetFt, actual:Math.round(finalState.alt), status, tol:cfg.altTol}});
+          // The opposite direction from the bust branch above: the aircraft
+          // stayed on the wrong SIDE of the target the whole time rather
+          // than crossing through it, so this is "never reached," never
+          // "through" - confirms the direction-strict bust condition above
+          // really is the only case that earns the through-wording.
+          const neverReachedGap = Math.round(Math.abs(finalState.alt - targetFt));
+          const neverReachedNote = status==='warn' ? 'fell short' : 'never reached';
+          results.push({type:'ALT', status, label, diagram:{target:targetFt, actual:Math.round(finalState.alt), status, tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${neverReachedGap.toLocaleString()}ft, ${neverReachedNote}`}}});
         }
       }
     }
@@ -2299,7 +2456,31 @@ function evaluateExchange(ex, cfg){
   //    real performance data instead of an unguided guess.
   const vsWin = ex.clearance.altitude ? altWin : win;
   if(vsWin.length >= 2){
-    let mostNegativeVsFinal = 0, maxAbsVsEnroute = 0;
+    let mostNegativeVsFinal = 0;
+    // The enroute check used to trust a rate computed from ANY two
+    // samples, no matter how far apart - the final-approach check right
+    // above already knew better than to do that (dt<=1 only) but nothing
+    // enforced the same discipline down here. Two distinct problems, both
+    // addressed together:
+    //  1. A real multi-minute PlayerState gap (documented elsewhere in
+    //     this file as routine) can average over genuinely varied real
+    //     behavior, masking a real excursion inside the gap rather than
+    //     detecting it - so dt<=1 is required here too, same as above.
+    //  2. Even a dt<=1 pair isn't as trustworthy as "1 minute apart"
+    //     sounds - PlayerState timestamps are whole minutes only, so a
+    //     recorded dt=1 could be anywhere from ~1 second to ~119 seconds
+    //     of real elapsed time, and dividing by the wrong denominator can
+    //     push a single interval's computed rate to almost 2x the real
+    //     rate in EITHER direction. A genuinely excessive sustained rate
+    //     shows up across multiple consecutive close-spaced intervals, not
+    //     just one - same ">=2 confirming samples" reasoning already used
+    //     by the HDG sustainedNonProgress check - so a single qualifying
+    //     interval over threshold is treated as inconclusive rather than
+    //     a verdict on its own.
+    // Flagged by an independent cross-model review; unconfirmed against
+    // any real log, added preventively rather than in response to an
+    // observed false positive.
+    let worstUp = 0, worstDown = 0, countUp = 0, countDown = 0;
     for(let i=1;i<vsWin.length;i++){
       const dt = vsWin[i].timeMin - vsWin[i-1].timeMin;
       if(dt<=0) continue;
@@ -2319,10 +2500,22 @@ function evaluateExchange(ex, cfg){
         // file) - a real data limitation, not something a threshold value
         // can fix, so this specific check only trusts closely-spaced pairs.
         if(dt <= 1 && vs < mostNegativeVsFinal) mostNegativeVsFinal = vs;
-      } else {
-        if(Math.abs(vs) > Math.abs(maxAbsVsEnroute)) maxAbsVsEnroute = vs;
+      } else if(dt <= 1 && Math.abs(vs) > cfg.vsWarn){
+        if(vs > 0){ countUp++; if(vs > worstUp) worstUp = vs; }
+        else { countDown++; if(vs < worstDown) worstDown = vs; }
       }
     }
+    // Each direction must qualify (>=2 confirming samples) independently
+    // before magnitude ever gets compared - a lone, non-qualifying sample
+    // in one direction (exactly the kind of isolated, possibly
+    // quantization-skewed reading this fix exists to distrust) must never
+    // be able to outrank and suppress a real, already-qualified violation
+    // in the other direction just for having bigger raw magnitude.
+    const upQualifies = countUp>=2, downQualifies = countDown>=2;
+    const maxAbsVsEnroute = upQualifies && downQualifies
+      ? (Math.abs(worstUp) >= Math.abs(worstDown) ? worstUp : worstDown)
+      : upQualifies ? worstUp
+      : downQualifies ? worstDown : 0;
     if(Math.abs(mostNegativeVsFinal) > cfg.approachVsLimit){
       const over = Math.round(Math.abs(mostNegativeVsFinal) - cfg.approachVsLimit);
       const status = over <= cfg.approachVsTol ? 'warn' : 'bad';
@@ -2388,24 +2581,30 @@ function evaluateExchange(ex, cfg){
       // boundary. User-reported 2026-08-31: "251 knots" recurring across
       // multiple real logs, always graded 'bad'.
       const status = over <= cfg.speedLimitTol ? 'warn' : 'bad';
-      results.push({type:'SPD', status, label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`});
+      // Deliberately `strip` only, never `diagram` here - these are flat
+      // regulatory caps, not an ATC-assigned target to converge on, and
+      // 2026-08-18 scoped the graphical compass/bar treatment to only the
+      // converge-on-a-target check family (see stateStripHtml's own
+      // comment). A `strip` still tells the same at-a-glance story without
+      // reopening that scoping decision.
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.speedBelow10k}kt`}, cell2:{label:'Reached', value:`${Math.round(worst250.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
     }
     if(worstApp){
       const over = Math.round(worstApp.spd - cfg.approachSpeedLimit);
-      results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`});
+      results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.approachSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstApp.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
     }
     if(worstBravo){
       const over = Math.round(worstBravo.spd - cfg.classBUnderlyingSpeedLimit);
       // Same hard-cap-with-no-tolerance gap as the 250kt/10,000ft check
       // above, same fix (own dedicated cfg.speedLimitTol, not cfg.spdTol).
       const status = over <= cfg.speedLimitTol ? 'warn' : 'bad';
-      results.push({type:'SPD', status, label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`});
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.classBUnderlyingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstBravo.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
     }
     if(ex.clearance.landing){
       const last = win[win.length-1];
       if(last && last.spd > cfg.landingSpeedLimit){
         const over = Math.round(last.spd - cfg.landingSpeedLimit);
-        results.push({type:'SPD', status:'warn', label:`Landing speed target ≤${cfg.landingSpeedLimit}kt — reached ${Math.round(last.spd)}kt (+${over}kt over)`});
+        results.push({type:'SPD', status:'warn', label:`Landing speed target ≤${cfg.landingSpeedLimit}kt — reached ${Math.round(last.spd)}kt (+${over}kt over)`, strip:{cell1:{label:'Limit', value:`${cfg.landingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(last.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
       }
     }
   }
@@ -2464,28 +2663,68 @@ function evaluateExchange(ex, cfg){
         const driftKt = Math.round(worstDrift.spd - targetKt);
         const status = Math.abs(driftKt) <= cfg.spdTol*2 ? 'warn' : 'bad';
         const dir = driftKt > 0 ? 'sped up to' : 'slowed to';
-        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`});
+        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Reached', value:`${targetKt}kt${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt)`}}});
       } else {
         results.push({type:'SPD', status: responseStatus, label:`SPD ${targetLabel} — reached${note}`});
       }
     } else if(spdWinFull.length){
       const finalSpd = spdWinFull[spdWinFull.length-1];
+      // reduce/increase also need the "shrunk gap alone isn't enough" fix,
+      // not just 'maintain' - checking real directional movement is not
+      // the same as checking ENOUGH of it happened. A "reduce speed 200"
+      // issued at 280kt (80kt needed) previously credited "still slowing,
+      // new instructions given before arriving" off a mere 12kt nudge -
+      // 15% of the assigned reduction - because the old check only asked
+      // "did it move more than spdTol in the right direction," with
+      // nothing checked against the target at all. Caught by an
+      // independent cross-model review of this exact fix pattern (see the
+      // HDG/ALT/SPD-maintain commits above); this closes the one instance
+      // that review had wrongly cleared as "structurally stronger, not
+      // obviously subject to the same false-positive class."
+      const directionalGap = (action==='reduce' || action==='increase') && startState ? Math.abs(startState.spd - targetKt) : null;
+      const directionalReduction = directionalGap!=null
+        ? (action==='reduce' ? startState.spd - finalSpd.spd : finalSpd.spd - startState.spd)
+        : null;
+      // Unlike ALT's climb/descend, SPD has no separate "bust" scan
+      // bounding how far off-target the starting state can be before this
+      // branch is even reached - so directionalGap (a bare Math.abs) needs
+      // its own guard against a degenerate case: a 'reduce' clearance is
+      // only meaningful if the aircraft actually started ABOVE target (an
+      // 'increase' only if it started BELOW). If startState already sat on
+      // the wrong/opposite side by more than spdTol - a real ATC "reduce"/
+      // "increase" wouldn't be issued that way, but a mistimed/sparse
+      // PlayerState sample attributed to the instruction could still read
+      // that way - crediting further movement in the nominal direction
+      // isn't closing a real gap, it's either already-compliant motion or
+      // a data anomaly, and shouldn't produce a "still slowing/speeding
+      // up, new instructions given before arriving" claim either way.
+      // Flagged by an independent cross-model review; unconfirmed against
+      // any real log, added preventively rather than in response to an
+      // observed false positive.
+      const startedOnExpectedSide = directionalGap!=null && (
+        action==='reduce' ? startState.spd > targetKt + cfg.spdTol : startState.spd < targetKt - cfg.spdTol
+      );
       // Same "was it genuinely progressing when superseded" reasoning as
       // ALT's action==='maintain' case - a plain "maintain X knots" says
       // neither reduce nor increase, so judge it by whether the gap to
-      // target closed.
+      // target closed, not by direction - same fix, same 20% floor.
+      const maintainStartGap = (action==='maintain' && startState) ? Math.abs(startState.spd - targetKt) : null;
+      const maintainReduction = maintainStartGap!=null ? maintainStartGap - Math.abs(finalSpd.spd - targetKt) : null;
       const progressing = startState && (
-        (action==='reduce' && finalSpd.spd < startState.spd - cfg.spdTol) ||
-        (action==='increase' && finalSpd.spd > startState.spd + cfg.spdTol) ||
-        (action==='maintain' && Math.abs(finalSpd.spd - targetKt) < Math.abs(startState.spd - targetKt) - cfg.spdTol)
+        ((action==='reduce' || action==='increase') && startedOnExpectedSide && directionalReduction!=null && directionalReduction > cfg.spdTol && directionalReduction >= directionalGap * 0.2) ||
+        (action==='maintain' && maintainReduction!=null && maintainReduction > cfg.spdTol && maintainReduction >= maintainStartGap * 0.2)
       );
       if(ex.spdSuperseded && progressing){
         // Same telemetry-based direction as the ALT carryover branch above -
         // reads off startState.spd vs. finalSpd.spd instead of the
         // ATC-assigned verb, so 'maintain X knots' no longer needs a
         // direction-neutral fallback either.
-        const progressVerb = finalSpd.spd > startState.spd ? 'still speeding up' : 'still slowing';
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}});
+        // Same label-clarity fix as the HDG/ALT "still X" cases above -
+        // names the actual speed reached, not just the assigned target.
+        const actualSpdVal = Math.round(finalSpd.spd);
+        const progressVerb = finalSpd.spd > startState.spd ? `still speeding up, now at ${actualSpdVal}kt` : `still slowing, now at ${actualSpdVal}kt`;
+        const spdGap = Math.round(Math.abs(targetKt - finalSpd.spd));
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} assigned — ${progressVerb}, new instructions given before arriving`, carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Aircraft now', value:`${actualSpdVal}kt`}, cell3:{label:'Gap remaining', value:`${spdGap}kt, moving toward it`}}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetLabel} — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
@@ -2510,7 +2749,8 @@ function evaluateExchange(ex, cfg){
           (action==='maintain' && Math.abs(finalSpd.spd - targetKt) > Math.abs(startState.spd - targetKt) + cfg.spdTol)
         );
         const status = (ex.spdSuperseded && !regressed) ? 'warn' : 'bad';
-        results.push({type:'SPD', status, label, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}});
+        const spdNote = status==='warn' ? 'fell short' : 'never reached';
+        results.push({type:'SPD', status, label, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Ended at', value:`${Math.round(finalSpd.spd)}kt`}, cell3:{label:'Off by', value:`${Math.abs(diff)}kt, ${spdNote}`}}});
       }
     }
   }
@@ -2546,7 +2786,13 @@ function evaluateExchange(ex, cfg){
         delay = startState ? compliedAt.timeMin - startState.timeMin : null;
       }
       const slow = delay!=null && delay > cfg.responseDelayMax;
-      const note = delay!=null ? ` in ~${delay}m` : '';
+      // delay===0 is the "pre-liftoff/not worth timing" sentinel from the
+      // ground-phase branch above, not a real ~0-minute measurement - the
+      // comment on that branch already says so ("not worth timing"), but the
+      // label kept printing "in ~0m" anyway, misreading a "nothing to time"
+      // case as "set nearly instantly". Real user complaint: only a genuine
+      // (>0) elapsed time is worth surfacing.
+      const note = (delay!=null && delay>0) ? ` in ~${delay}m` : '';
       results.push({type:'SQUAWK', status: slow?'warn':'ok', label:`Squawk ${targetCode} — set${note}`});
     } else if(ex.squawkWindowStates.length){
       const actual = parseSquawk(ex.squawkWindowStates[ex.squawkWindowStates.length-1]) || 'unknown';
@@ -3305,6 +3551,37 @@ function refineSpeakersByCallsign(events, callsign){
   // inbound for landing, Nantucket Memorial.") is already covered by
   // ctafRe above.
   const arrivalCheckInRe = /\binbound for landing\b/i;
+  // Pilot's own frequency-handoff readback - "Over to tower 120.95, United
+  // 1823, take care."/"...good day." - same root cause as checkInRe/
+  // posReportRe/pilotAckRe above (real content trails the callsign, so
+  // endRe's bare trailing-callsign match fails), but this one additionally
+  // collided with checkInRe/checkInTailRe's own "ends right at the greeting
+  // = genuine ATC sign-off" assumption for the "...good day."-tailed variant,
+  // which otherwise left it stuck at the default 'ATC'. "Over to" as the
+  // opening two words is pilot-only vocabulary in this log format - ATC's own
+  // handoff instruction always says "contact"/"radar contact", never "over
+  // to" - so this is safe as a bare leading-phrase match, no callsign
+  // adjacency needed. Audited every "Over to" instance across the full
+  // Player Log Samples/ library before adding this: all are this exact
+  // pilot-readback shape (with or without a trailing "take care."/"good
+  // day."/"bye bye."/"see you." sign-off), zero ATC counterexamples. Checked
+  // ahead of checkInRe below so it wins regardless of how checkInTailRe would
+  // otherwise judge a "...good day."-tailed instance.
+  const handoffReadbackRe = /^\s*over to\b/i;
+  // Pilot's own present-tense hold-short position report - "<CALLSIGN>,
+  // holding short, runway NN." - collides directly with startRe (leads with
+  // the callsign, exactly ATC's own leading shape), unlike every other
+  // pattern in this function which only ever needed a new inclusion because
+  // it fell through the default. Real ATC's equivalent phraseology is always
+  // an imperative ("HOLD SHORT of Runway X") or third-person ("traffic
+  // holding short Runway X") - never "<own callsign>, holding short..." said
+  // back to the aircraft it's about, which would make no sense as an ATC
+  // instruction. Audited every "holding short" instance across the full
+  // library before adding this: all are this exact pilot report shape, zero
+  // ATC counterexamples (the one non-matching case, "report holding short
+  // runway 20", is ATC's imperative "report" wording, a different shape that
+  // was never going to match startRe in the first place).
+  const holdingShortRe = new RegExp(esc+'\\s*,\\s*holding short\\b', 'i');
   events.forEach(e=>{
     // A player self-report (playerActionTriggered - set in parseLegLines
     // from either a [PlayerAction] tag or matching known self-report
@@ -3324,8 +3601,10 @@ function refineSpeakersByCallsign(events, callsign){
     // request carries no clearance for evaluateExchange to grade either way.
     if(e.playerActionTriggered || e.speechTranscription) return;
     const t = e.text.trim();
-    if(startRe.test(t)) e.speaker = 'ATC';
+    if(holdingShortRe.test(t)) e.speaker = 'PILOT';
+    else if(startRe.test(t)) e.speaker = 'ATC';
     else if(endRe.test(t)) e.speaker = 'PILOT';
+    else if(handoffReadbackRe.test(t)) e.speaker = 'PILOT';
     else if(checkInRe.test(t) && !checkInTailRe.test(t)) e.speaker = 'PILOT';
     else if(posReportRe.test(t)) e.speaker = 'PILOT';
     else if(pilotAckRe.test(t)) e.speaker = 'PILOT';
@@ -3776,6 +4055,24 @@ function linearBarSvg({target, actual, status, unit, tol, actualLabel='actual'})
   </div>`;
 }
 
+// At-a-glance assigned/current/gap readout, rendered in the ALWAYS-VISIBLE
+// collapsed card (unlike headingCompassSvg/linearBarSvg above, which only
+// render in the click-to-expand .strip-detail section) - added because a
+// user reading the collapsed view alone had no way to see assigned-vs-actual
+// without parsing the full prose label. Deliberately a separate `strip`
+// field on the result object rather than reusing `diagram`: reusing
+// `diagram` would also make flat-limit SPD checks (250kt-below-10k etc.)
+// start rendering linearBarSvg in the detail view too, reversing the
+// 2026-08-18 decision to scope that graphical treatment to only the
+// converge-on-a-target check family (see atc-compliance-debugger.NOTES.md).
+// A dumb 3-cell template - each push site in evaluateExchange decides what
+// goes in each cell directly (same as it already decides `label` text),
+// nothing per-check-type branches inside this function.
+function stateStripHtml({cell1, cell2, cell3}, status){
+  const cellHtml = c => `<div class="state-cell"><div class="lbl">${escapeHtml(c.label)}</div><div class="val">${escapeHtml(c.value)}</div></div>`;
+  return `<div class="state-strip ${status}">${cellHtml(cell1)}${cellHtml(cell2)}${cellHtml(cell3)}</div>`;
+}
+
 function renderStrip(ex){
   const overall = ex.eval.overall;
   const cls = overall==='ok'?'status-ok':overall==='warn'?'status-warn':overall==='bad'?'status-bad':'';
@@ -3801,6 +4098,10 @@ function renderStrip(ex){
     if(r.type==='SPD') return linearBarSvg({...r.diagram, unit:'kt'});
     return '';
   }).join('');
+  // Same "one per result" fan-out as diagramsHtml above, but rendered
+  // collapsed (see stateStripHtml) - independent of whether that same
+  // result also carries `diagram`.
+  const stripsHtml = ex.eval.results.filter(r=>r.strip).map(r=>stateStripHtml(r.strip, r.status)).join('');
   const t = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : '—';
 
   const div = document.createElement('div');
@@ -3810,6 +4111,7 @@ function renderStrip(ex){
       <div class="strip-time">${t}</div>
       <div class="strip-main">
         <div class="strip-instr"><span class="who">${ex.atc.speaker==='PILOT' ? pilotLabel(ex.atc) : 'ATC'}</span>${escapeHtml(ex.atc.text)}</div>
+        ${stripsHtml}
         ${badges ? `<div class="strip-badges">${badges}</div>` : ''}
         <!-- Moved out of the click-to-expand detail panel (2026-08-22) - the
              pilot's readback, including its own timestamp for at-a-glance
@@ -3836,7 +4138,18 @@ function renderStrip(ex){
           ${ex.atc.state ? renderStateKV(ex.atc.state) : '<div class="kv">No state captured</div>'}
         </div>
         <div class="detail-col">
-          <h4>State at end of response window</h4>
+          <!-- Renamed from "State at end of response window" (2026-09-05) -
+               that name implied this was the same window the compliance
+               badge grades against. It isn't: windowStates is bounded by
+               the very next ATC transmission of ANY kind (a short, generic
+               window built only for this snapshot), while the badge's own
+               verdict uses a longer, type-specific window (hdgWindowStates/
+               altWindowStates/etc., bounded by the next instruction of the
+               SAME type) that can span further. The two can genuinely
+               disagree when other ATC chatter falls in between - this is
+               what triggered a real user's "196 vs 190, what does response
+               window even mean?" confusion reading Player bad vector.log. -->
+          <h4 title="The aircraft's state at the very next ATC transmission of any kind - a short snapshot window, not necessarily the same window the compliance badge above was graded against.">State at next ATC transmission</h4>
           ${ex.windowStates.length ? renderStateKV(ex.windowStates[ex.windowStates.length-1]) : '<div class="kv">No further data</div>'}
         </div>
       </div>
