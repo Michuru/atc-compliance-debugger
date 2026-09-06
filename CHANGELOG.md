@@ -4,6 +4,22 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.8.0] - 2026-09-06
+
+### Added
+- A compact "Assigned / current / gap" readout now shows directly on every exchange card, always visible — HDG/ALT/SPD carryover-in-progress, missed-target, post-compliance-drift, and flat speed-limit findings all get one. Previously the only assigned-vs-actual visual (a compass/linear-bar diagram) only appeared in the card's click-to-expand detail view.
+- Recognizes "maintain speed NNN kts" phrasing in speed clearances (previously only "maintain NNN"/"maintain to NNN" parsed) — confirmed against a real log using this exact phrasing, which previously produced zero speed-compliance result for the whole clearance rather than just an ungraded one.
+
+### Changed
+- "ALT X — overshot / busted altitude" is now "ALT X — descended/climbed through the assigned altitude", verb-matched to the actual clearance direction — the old wording read as ambiguous about direction (implying "went over" universally, blackjack-style); the underlying bust-detection logic itself is unchanged.
+- The "still turning/ascending/descending/speeding up/slowing" progress labels, and the HDG detail-view's final-heading wording, now consistently name the actual value reached, not just the assigned target (e.g. "HDG 120° assigned — still turning toward it, now at 57°..."; "ended at X°" instead of the ambiguous "current heading X instead").
+
+### Fixed
+- Several HDG/ALT/SPD "still progressing, superseded before arriving" checks could credit a clearance as compliant off a real but far-too-small gap reduction — as little as 8% of a 158°-assigned turn. All three now require the reduction to be a meaningful fraction (20%) of the actual gap; the HDG check additionally now verifies the assigned turn direction itself, so a wrong-direction turn superseding an assigned one can no longer read as progress.
+- Guarded the same progress checks (ALT climb/descend, SPD reduce/increase) against crediting movement when the recorded starting point was itself already on the wrong side of the target.
+- The enroute vertical-speed check could compute a rate from two samples an unbounded time apart, or from a single unconfirmed outlier interval; now requires a tight sampling gap and at least two confirming same-direction readings before flagging a violation.
+- Fixed a squawk-compliance label incorrectly showing a "set in ~0m" timing note for ground-phase compliance; fixed a courtesy-filler pilot line ("You're very welcome.") being mispaired as a delayed readback to an unrelated later transmission; fixed two real pilot transmissions (a frequency-handoff acknowledgment, a present-tense hold-short report) being misclassified as ATC speech.
+
 ## [1.7.0] - 2026-09-02
 
 ### Added
