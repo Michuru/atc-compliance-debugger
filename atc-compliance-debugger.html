@@ -109,6 +109,10 @@ header.topbar{
 .stat.ok .n{color:var(--green);}
 .stat.warn .n{color:var(--amber);}
 .stat.bad .n{color:var(--red);}
+.stat.clickable{cursor:pointer;}
+.stat.clickable:hover{opacity:0.75;}
+.stat.active .n{text-decoration:underline;}
+.stat.active .l{color:var(--text);}
 button.ghost{
   background:transparent;border:1px solid var(--line);color:var(--text-dim);
   border-radius:6px;padding:7px 12px;font-family:inherit;font-size:12px;cursor:pointer;
@@ -4126,6 +4130,12 @@ function matchesFilter(ex){
   if(searchTerm && !ex.atc.text.toLowerCase().includes(searchTerm)) return false;
   if(activeFilter==='all') return true;
   if(activeFilter==='flagged') return ex.eval.overall==='warn' || ex.eval.overall==='bad';
+  // 'ok'/'warn'/'bad' are overall-status filters (wired to the header stat
+  // tiles below), distinct from the per-check-type pills (HDG/ALT/SPD/...)
+  // the fallback below handles - overall status and result.type are two
+  // different vocabularies that happen to share no overlapping values, so
+  // this branch has to come first rather than folding into the fallback.
+  if(activeFilter==='ok' || activeFilter==='warn' || activeFilter==='bad') return ex.eval.overall===activeFilter;
   return ex.eval.results.some(r=>r.type===activeFilter);
 }
 
@@ -4340,15 +4350,36 @@ function renderList(){
   filtered.forEach(ex=> list.appendChild(renderStrip(ex)));
 }
 
-function render(){
+function renderStats(){
+  // Each stat tile doubles as a filter shortcut (clicking "Violations"
+  // is the direct answer to "how do I see just the violations" - the
+  // existing filter-bar pills below cover per-check-type filtering, but
+  // had no dedicated overall-status filter until this). Reuses the same
+  // activeFilter/matchesFilter mechanism the pills already use, just a
+  // second entry point onto it - clicking a tile sets activeFilter
+  // exactly the way clicking a pill does. Split out of render() into its
+  // own function so the click handler below can refresh just the tiles'
+  // own active-state highlighting without re-running the rest of render()
+  // (which would otherwise also re-run renderList() a second time).
   const counts = statusCounts();
   const stats = document.getElementById('hStats');
-  stats.innerHTML = `
-    <div class="stat"><div class="n">${counts.total}</div><div class="l">Instructions</div></div>
-    <div class="stat ok"><div class="n">${counts.ok}</div><div class="l">Compliant</div></div>
-    <div class="stat warn"><div class="n">${counts.warn}</div><div class="l">Warnings</div></div>
-    <div class="stat bad"><div class="n">${counts.bad}</div><div class="l">Violations</div></div>
-  `;
+  const statDef = [
+    {filter:'all', cls:'', n:counts.total, l:'Instructions'},
+    {filter:'ok', cls:'ok', n:counts.ok, l:'Compliant'},
+    {filter:'warn', cls:'warn', n:counts.warn, l:'Warnings'},
+    {filter:'bad', cls:'bad', n:counts.bad, l:'Violations'},
+  ];
+  stats.innerHTML = statDef.map(s=>
+    `<div class="stat clickable${s.cls?' '+s.cls:''}${activeFilter===s.filter?' active':''}" data-filter="${s.filter}">`+
+    `<div class="n">${s.n}</div><div class="l">${s.l}</div></div>`
+  ).join('');
+  stats.querySelectorAll('.stat').forEach(el=>{
+    el.onclick = ()=>{ activeFilter = el.dataset.filter; renderStats(); buildFilterBar(); renderList(); };
+  });
+}
+
+function render(){
+  renderStats();
   renderList();
 }
 

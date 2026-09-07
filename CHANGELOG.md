@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.10.0] - 2026-09-07
+
+### Added
+- The four header counts (Instructions/Compliant/Warnings/Violations) are now clickable filters — click "Violations" to see only the red/bad instructions, matching the same filter mechanism the pill bar below already used.
+
 ## [1.9.0] - 2026-09-07
 
 ### Added
