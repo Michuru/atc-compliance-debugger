@@ -551,6 +551,24 @@ const RE_ATC_REQUEST_ECHO = /\bsay request\b|\bas requested\b|\bmake a\s+\S+\s+r
 // to verify this distinction against. Revisit if a counterexample turns up.
 const RE_PILOT_GOAROUND = /\bgoing around\b/i;
 
+// ATC's own stated fact that the aircraft is off its assigned course
+// (2026-09-07) - always paired with a corrective "cleared direct <fix>.
+// resume own navigation" in this corpus, but the advisory itself previously
+// raised no finding anywhere: a real, ATC-confirmed navigation deviation
+// happened, and the tool had no way to say so. Matches this file's
+// vfrCeiling/go-around precedent - a check built only against something
+// ATC explicitly stated, not inferred geometry (no lat/lon course-deviation
+// database exists here, same permanent limitation documented elsewhere in
+// this file). Audited: exactly 2 real instances across the corpus, both the
+// identical phrasing, zero counterexamples - `2026-07-19(EGAA-EGNV)dd.log`
+// line 1021 ("Broadsword 925, you're off course. Cleared direct SHAPP.
+// Resume own navigation.") and a queued bug-report log's Wizzair 66UV case.
+// Deliberately informational (status 'warn', not 'bad') and NOT tied to any
+// clearance/hasTarget machinery - this fires off the ATC line's own text
+// regardless of what else that instruction contains, mirroring how
+// RE_PILOT_GOAROUND's INFO result is independent of clearance content.
+const RE_ATC_OFF_COURSE = /you'?re off course/i;
+
 // A single Player.log can contain multiple legs back-to-back if the sim
 // session was reused without restarting BeyondATC (each leg gets its own
 // "Player Callsign:" line). Parsing the whole file as one flight in that
@@ -1104,7 +1122,30 @@ function parseFieldInSightRequest(text){
 // are canceled" releases it from an interim altitude restriction.
 function parseCancelClearance(text){
   return {
-    heading: /resume\s+own\s+navigation/i.test(text),
+    // "Resume the <SID>" (2026-09-07) is a second real heading-cancel
+    // phrasing alongside "resume own navigation" - real FAA AIM controller
+    // phraseology ("Resume the SALTY ONE departure"/"Resume the Solar One
+    // departure, Climb via SID" - ATC Regulatory Docs/aim.txt lines
+    // 10124/14475) for handing navigation back to a charted SID after a
+    // vector/direct-fix deviation. Already a known real phrase in this
+    // corpus (`Player Log Samples/KADS that works.log` line 4723: "cleared
+    // direct CUZNO, resume the NANDR4" - deriveDepartureVectors's own
+    // comment above already flags it, just never wired into cancellation),
+    // but parseCancelClearance never recognized it - a "fly heading X,
+    // cleared for takeoff" clearance issued on departure had no way to
+    // close, so its compliance window stayed open through the entire rest
+    // of the SID-following climb (a real "resume the ANKUB1" a few
+    // exchanges later in a queued bug-report log), producing a false
+    // "reached it, then drifted 105° off" verdict off ordinary SID turns
+    // that were never this clearance's business to grade. Matched against
+    // `[A-Z0-9]{3,8}` (same real SID/fix-code shape `deriveDepartureVectors`
+    // matches with `[A-Z0-9]+` above) WITHOUT the /i flag applied to that
+    // half, deliberately - AIM's own "resume the published speed"/"resume
+    // the procedure" phrasing (lowercase, multi-word, jo7110.txt/aim.txt)
+    // must not falsely cancel a heading clearance; no such lowercase
+    // "resume the ..." phrasing exists in any real BeyondATC log in this
+    // corpus, only the all-caps SID-code form.
+    heading: /resume\s+own\s+navigation/i.test(text) || /resume\s+the\s+[A-Z0-9]{3,8}\b/.test(text),
     altitude: /altitude\s+restrictions?\s+(?:are|is)\s+cancel(?:l)?ed/i.test(text),
     // "Resume normal speed" - confirmed real phraseology in
     // `2026-08-03(EIDW-EGNT).log`, same role as "resume own navigation" for
@@ -1786,6 +1827,21 @@ function evaluateExchange(ex, cfg){
   const hdgWin = ex.hdgWindowStates; // until superseded by a new heading clearance
   const altWin = ex.altWindowStates; // until superseded by a new altitude clearance
 
+  // ---- OFF-COURSE ADVISORY ----
+  // See RE_ATC_OFF_COURSE's own comment for citations/audit. Checked first,
+  // unconditionally against the raw ATC text - independent of clearance
+  // type, since the real phrase is always bundled into a "cleared direct
+  // X. Resume own navigation." heading-cancel instruction that carries no
+  // gradable heading/altitude target of its own.
+  if(RE_ATC_OFF_COURSE.test(ex.atc.text)){
+    // status:'bad', not 'warn' - unlike the go-around INFO precedent (which
+    // stays 'ok' since it's neutral, not a compliance signal), ATC stating
+    // the aircraft is off course IS the compliance failure itself, the most
+    // severe tier this tool has - deliberately does skew the tallies/flagged
+    // filter, confirmed as the intended behavior (2026-09-07).
+    results.push({type:'INFO', status:'bad', label:'ATC reported the aircraft off course'});
+  }
+
   // ---- HEADING ----
   if(ex.clearance.heading){
     const target = ex.clearance.heading.targetHdg;
@@ -2007,6 +2063,31 @@ function evaluateExchange(ex, cfg){
         if(releasedByApproach && diff <= cfg.vectorReleaseTol && turnedMeaningfully){
           results.push({type:'HDG', status:'ok', label:`Assigned ${target}° — cleared for the approach in the same instruction, ended up at ${actual}° (${diff}° off the vector) — likely capturing the final approach course, not independently verified from available states`, diagram:{target, actual, status:'ok'}});
         } else {
+        // A never-superseded HDG clearance running out of elapsed time
+        // isn't a violation - the exact HDG-side parallel to the ALT
+        // notEnoughTime guard documented in NOTES.md ("A never-superseded
+        // ALT clearance running out of elapsed time isn't a violation"),
+        // which was ported to SPD but never to HDG. Confirmed real via a
+        // queued bug-report log: a "turn right, heading 160" go-around
+        // re-vector issued as literally the LAST instruction in the log
+        // (hdgWin.length===0, zero post-instruction PlayerState samples at
+        // all - not just few, none) fell through to `finalState=startState`
+        // (line ~1862 above), comparing the target against the
+        // PRE-instruction heading (332°, itself already flagged by
+        // BeyondATC's own [VectorIssue] TrackDeviation line moments
+        // earlier) as if it were a real "final" observation - producing a
+        // "172° off" bad verdict with zero evidence any turn was ever
+        // attempted or missed, only that the recording ended right after
+        // the instruction. Reuses the identical base-allowance-plus-scaling
+        // formula the compliedAt branch above already computes
+        // (responseDelayMax + heading-delta/180, 3°/sec standard rate) so
+        // the bar for "had a fair chance" is the same either way.
+        const elapsedAvail = hdgProgressStart ? finalState.timeMin - hdgProgressStart.timeMin : 0;
+        const expectedMaxAvail = cfg.responseDelayMax + (hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target)/180 : 0);
+        const notEnoughTime = !ex.hdgSuperseded && elapsedAvail < expectedMaxAvail;
+        if(notEnoughTime){
+          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — instruction given shortly before the recording ended, not enough data to judge compliance`});
+        } else {
         const status = ex.hdgSuperseded
           ? (sustainedNonProgress ? 'bad' : 'warn')
           : (finalDiff <= cfg.hdgTol*2 ? 'warn' : 'bad');
@@ -2022,6 +2103,7 @@ function evaluateExchange(ex, cfg){
         // approach-intercept branch above already uses for the same concept.
         const stripNote = !turnedMeaningfully ? 'no turn detected' : (status==='warn' ? 'fell short' : 'off target');
         results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°, ${diff}° off`, shortLabel:'', diagram:{target, actual, status}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Ended at', value:`${actual}°`}, cell3:{label:'Off by', value:`${diff}°, ${stripNote}`}}});
+        }
         }
       }
     } else {
@@ -2371,7 +2453,39 @@ function evaluateExchange(ex, cfg){
         // known parallel bug when the HDG side was fixed, not yet fixed
         // there until now - see atc-compliance-debugger.NOTES.md.
         const altSpreadElapsed = altSpreadWin.length ? altSpreadWin[altSpreadWin.length-1].timeMin - altSpreadWin[0].timeMin : 0;
-        const sustainedNonProgress = !altLiftoffPending && altSpreadWin.length >= 2 && flatRange <= cfg.altTol && altSpreadElapsed >= 1;
+        // Second, narrower elapsed-time floor for the ground-clearance
+        // liftoff-anchor case specifically (2026-09-07) - a plain >=1
+        // floor is exactly right for AAL3264's own motivating case
+        // (progressStart===startState there, real cruise/descent altitude,
+        // genuinely dead level) but was NOT enough for a clearance whose
+        // progressStart anchors to the liftoff moment itself
+        // (progressStart===liftoffState, set a few lines above): confirmed
+        // real via a queued bug-report log, a "climb to 6000 feet"
+        // clearance re-issued ("Negative, [restate]") right as the aircraft
+        // rotated - the two available post-liftoff samples (768ft->779ft,
+        // both barely above field elevation) sat only 1 real minute apart,
+        // correctly not yet counted as real progress by the 20%-of-gap
+        // `progressing` floor elsewhere in this function, but the bare
+        // >=1 floor here was equally happy to call one minute of
+        // just-rotated telemetry a "confirmed stall" and escalate straight
+        // to 'bad' ("never reached", 5,221ft off) - nowhere near enough
+        // time for a real climb rate to even establish itself yet, let
+        // alone show as flat. A distance/rate-scaled floor (matching
+        // notEnoughTime's own formula below) was tried and rejected first -
+        // it also swallowed AAL3264's case, since that fixture's own real
+        // elapsed spread is ALSO only 1 minute (a ~1,490ft gap already
+        // exceeds responseDelayMax's 3-minute base allowance on its own,
+        // regardless of altMinRate) - the distance-scaled version isn't a
+        // usable floor for THIS check at all, only for notEnoughTime's own
+        // different question ("did the whole clearance run out of time").
+        // The real distinguishing signal is the liftoff anchor itself, not
+        // distance: `progressStart===liftoffState` is only ever true in the
+        // ground-clearance path (liftoffState stays null whenever
+        // isOnGround(startState) is false, per its own declaration above),
+        // so this can't affect any enroute/already-airborne clearance
+        // (AAL3264 included) regardless of gap size.
+        const minSpreadForLiftoffAnchor = (progressStart === liftoffState) ? 2 : 1;
+        const sustainedNonProgress = !altLiftoffPending && altSpreadWin.length >= 2 && flatRange <= cfg.altTol && altSpreadElapsed >= minSpreadForLiftoffAnchor;
         // A never-superseded clearance falls straight to a hard 'bad' below
         // by default - correct when there was plenty of time to comply and
         // it never happened, but wrong when the window (and the log/leg
@@ -2801,7 +2915,29 @@ function evaluateExchange(ex, cfg){
   }
 
   // ---- RESPONSE DELAY (readback) ----
-  if(ex.readback && ex.readback.state && startState){
+  // Gated on ex.hasTarget (2026-09-07 fix) - the sibling "No readback
+  // captured" branch three lines below already only fires when a readback
+  // was actually expected (renderStrip's own detail view mirrors this same
+  // gate - see "The detail-view 'No readback captured' warning is only red
+  // when a readback was actually expected" in NOTES.md), but this delay-
+  // timing branch had no such gate: it fired off the mere EXISTENCE of a
+  // readback pairing, regardless of whether the ATC line it's paired with
+  // ever issued anything to read back. Real user reports, both confirmed
+  // via live log: a routine "identified" radar-contact-style call with zero
+  // clearance content (hasTarget:false) got paired by the readback-finding
+  // loop with the player's own unrelated LATER transmission (a "request
+  // altitude change"/"request FL320" call 12 minutes on, in one case; a
+  // "request FL360" call 5 minutes after a plain "radar contact" call in
+  // another) as if it were a delayed reply - producing a spurious "Readback
+  // delayed ~Xm" warning for an ATC line that never called for a response
+  // at all. Real ATC "identified"/"radar contact" calls are informational
+  // only, matching this file's own documented `hasFrequencyMention`
+  // treatment of "radar contact" phraseology elsewhere (never a facility
+  // handoff needing acknowledgment). Fixed by requiring `ex.hasTarget` here
+  // too - the readback pairing itself is untouched (still shown in the
+  // detail view when present), only the delay-timing verdict is suppressed
+  // when there was nothing to comply with in the first place.
+  if(ex.readback && ex.readback.state && startState && ex.hasTarget){
     const d = ex.readback.state.timeMin - startState.timeMin;
     if(d > cfg.responseDelayMax){
       // Real user complaint: "~Xm" alone gives no way to cross-check this
@@ -3016,6 +3152,15 @@ const AIRCRAFT_APPROACH_CATEGORY = {
   C172:'A', C152:'A', C182:'A', C150:'A', C206:'A', C210:'A',
   PA28:'A', PA32:'A', PA34:'A', PA44:'A',
   SR20:'A', SR22:'A', DA20:'A', DA40:'A', DA42:'A', DA62:'A',
+  // S22T (Cirrus SR22T, the turbocharged variant of the already-mapped
+  // SR22) added 2026-09-07 - real log had `Aircraft Type: S22T` but no
+  // table entry, silently falling back to flat DEFAULT_CFG. Real POH
+  // V-speeds: Vso (landing config) 64 KIAS, final approach 80-85 KIAS,
+  // threshold crossing 79 KIAS - comfortably under the 91kt Category A/B
+  // boundary, same tier as SR22 above despite the turbo engine (same
+  // reasoning as M600 elsewhere in this table: don't assume forced
+  // induction/cruise speed implies a higher approach-speed category).
+  S22T:'A',
   BE33:'A', BE36:'A', BE58:'A', M20P:'A', RV10:'A', AEST:'A',
   // C208 (Cessna 208 Caravan) and PA24 (Piper Comanche 250) added after an
   // audit prompted by the B733 gap below - both are in the user's own

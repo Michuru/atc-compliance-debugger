@@ -4,6 +4,18 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.9.0] - 2026-09-07
+
+### Added
+- ATC's own "you're off course" advisory is now surfaced as its own red finding — previously produced no finding at all, even though it's ATC explicitly stating a real navigation deviation happened.
+
+### Fixed
+- Cirrus SR22T (`S22T`) was missing from the aircraft category table, falling back to untuned flat defaults. Added using real POH data (Vso 64 KIAS, final approach 80-85 KIAS) — same Category A band as the already-mapped SR22.
+- "Readback delayed" could fire for a zero-content ATC call (e.g. "identified.", "radar contact.") spuriously paired with an unrelated later pilot transmission — the check was missing the same no-target gate its sibling "No readback captured" check already had.
+- A heading clearance's compliance window never closed at a SID handoff using BeyondATC's "resume the [SID]" phrasing (only "resume own navigation" was recognized), leaving it open through a normal multi-turn climb and producing a false large-deviation "drift" verdict.
+- A clearance with zero telemetry after it (e.g. a go-around re-vector as a log's literal last instruction) compared the assigned heading against stale pre-instruction data instead of reporting "not enough data to judge compliance" — the existing altitude-side guard for this case was never ported to heading.
+- A ground-issued clearance reissued ("Negative, [restated clearance]") right after liftoff could be graded as a confirmed sustained-non-progress bust off a single minute of post-liftoff data — now requires a longer confirmed window specifically when progress is anchored to the liftoff moment itself, without affecting an already-airborne clearance's own threshold.
+
 ## [1.8.1] - 2026-09-06
 
 ### Fixed

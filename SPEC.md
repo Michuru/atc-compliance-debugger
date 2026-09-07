@@ -38,6 +38,7 @@ It runs entirely in a web browser, client-side — nothing in your log is ever u
 - **Readback**: did the pilot acknowledge instructions that actually assigned something to comply with? A frequency-change-only call with no clearance content never expects one. This also covers a "report the field in sight" request — a real reply ("field in sight," "we have the field") is expected within the same response-timing window as any other instruction, not just a readback of numbers.
 - **Vertical speed**: two distinct checks — an enroute caution/violation ceiling (a secondary "something unusual happened" signal, not a hard regulatory limit — no such limit exists) and a separate, stricter final-approach sink-rate check tied to real stabilized-approach criteria. The final-approach check allows a small tolerance band above its limit before escalating from caution to violation, same reasoning as the speed limits above.
 - **Transponder**: flags a squawk left off after takeoff on an IFR departure (normal while parked; a genuine finding if it's still off several samples after liftoff).
+- **Off-course advisory**: if ATC's own instruction says the aircraft is off course (e.g., "you're off course, cleared direct X, resume own navigation"), that's surfaced as its own red finding — unlike "Player announced going around" above, this isn't a neutral timeline note, since ATC stating the aircraft deviated is itself a compliance failure, independent of whether any specific heading/altitude/speed target was also assigned.
 
 ### Aircraft category system
 
@@ -89,7 +90,7 @@ Everything runs client-side in a single `.html` file — no build step, no serve
 
 | Category | Approach speed band | Example types in this tool |
 |---|---|---|
-| A | <91kt | C172, PA28, SR22, DA62, BE58, C208, PA24, DHC6 (Twin Otter), DHC2 (Beaver), AC11 (Commander 114), M600 (Piper M600) |
+| A | <91kt | C172, PA28, SR22, S22T (Cirrus SR22T), DA62, BE58, C208, PA24, DHC6 (Twin Otter), DHC2 (Beaver), AC11 (Commander 114), M600 (Piper M600) |
 | B | 91–121kt | P180, TBM, PC12, most light/midsize business jets, BE60, B58T (Baron 58P/58TC), C750, STAR, ATR72, DH8D (Dash 8 Q400), DC6 |
 | C | 121–141kt | 737 family, A320 family, E-Jets, CRJ family, 727 family, A310, 767-200/-200ER, 777-200/-200LR |
 | D | 141–166kt | 767-300ER, 777-300/-300ER, 787, 747-8, A330/A350, A380 |
