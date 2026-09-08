@@ -4,6 +4,15 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.11.0] - 2026-09-08
+
+### Added
+- Player-initiated requests ("request approach change," "request taxi," "request IFR clearance," etc.) now get their own visible timeline entry — previously a request line was correctly recognized as the pilot's own speech, but never shown anywhere, which could leave ATC's response to it looking like an unexplained non-sequitur.
+- The compact Assigned/current/gap readout (added in v1.8.0) now also appears on a fully compliant "reached it" heading/altitude/speed result, labeled "Off by: 0, on target" — previously scoped out of this one case as having nothing to compare, this closes the visual inconsistency of an otherwise-identical card missing the readout.
+
+### Fixed
+- A heading or altitude clearance superseded by ATC very shortly after being issued (e.g. re-cleared moments after liftoff, with barely a minute of real elapsed time) could be graded a hard "fell short"/"never reached" caution instead of "not enough data to judge compliance" — the existing not-enough-time leniency only ever applied to a clearance that ran out of log data, not one ATC itself superseded quickly. Confirmed real: an IFR delivery clearance issued at the gate, superseded ~1 minute after liftoff, previously showed "stayed low, ended 1,616ft (-13,384ft)" against a 15,000ft target that would normally take ~31 minutes to reach.
+
 ## [1.10.0] - 2026-09-07
 
 ### Added

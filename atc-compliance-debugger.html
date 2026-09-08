@@ -1482,6 +1482,49 @@ function buildExchanges(parsed){
       });
     });
 
+  // Player-initiated requests ("request approach change", "request direct
+  // to SHAPP", etc.) hit the same "leads with the callsign, so speaker-
+  // classification alone isn't enough to make it visible" gap the go-around
+  // fix above closed. RE_PILOT_REQUEST already existed (2026-08-08, see its
+  // own comment) but was only ever used to correctly TAG these lines PILOT,
+  // never to give them their own timeline entry - a genuinely spontaneous
+  // request (no preceding ATC prompt to attach to) fell on the floor
+  // exactly like a go-around report used to: correctly excluded from being
+  // misread as an ATC instruction, but then simply invisible everywhere in
+  // the tool's output. Confirmed against a real log (Japanair 3114,
+  // "request approach change" at 07:31): the very next visible line, ATC's
+  // "confirm new approach VORDME approach runway 18?", read as an
+  // unexplained question with no visible cause anywhere in the timeline.
+  // Excludes any PILOT_REQUEST-matching line already consumed as some OTHER
+  // exchange's own readback above (a genuine "answer to ATC's own question"
+  // - e.g. "Request direct to SHAPP, Broadsword 925" replying to "say fix
+  // name" - see this file's own comment on RE_PILOT_REQUEST for that exact
+  // ambiguity) so it doesn't ALSO get a redundant standalone entry; also
+  // excludes anything the two carve-outs above already gave their own entry
+  // to, since RE_PILOT_REQUEST's bare match could in principle overlap.
+  const consumedReadbackLineIndexes = new Set(exchanges.filter(ex=>ex.readback).map(ex=>ex.readback.lineIndex));
+  events.filter(e =>
+    e.speaker==='PILOT' &&
+    RE_PILOT_REQUEST.test(e.text) && !RE_ATC_REQUEST_ECHO.test(e.text) &&
+    !RE_PILOT_SELF_REPORT.test(e.text) && !RE_PILOT_GOAROUND.test(e.text) &&
+    !consumedReadbackLineIndexes.has(e.lineIndex)
+  ).forEach(reportEvent => {
+    exchanges.push({
+      id: null, // reassigned below once the merged array is in final chronological order
+      lineIndex: reportEvent.lineIndex,
+      atc: reportEvent, // same {lineIndex,text,rawVoice,sid,speaker,state} shape renderStrip already expects
+      readback: null,
+      clearance: { altitude:null, heading:null, speed:null, approach:null, landing:null, cancel:{heading:false,altitude:false} },
+      hasTarget: false,
+      windowStates: [], altWindowStates: [], hdgWindowStates: [],
+      altSuperseded:false, altSupersededBy:null, altSupersededByIdx:null,
+      hdgSuperseded:false, hdgSupersededBy:null, hdgSupersededByIdx:null,
+      isLast:false,
+      isPilotReport: true,
+      reportKind: 'request'
+    });
+  });
+
   // Re-sort chronologically (player-report entries were appended after the
   // atcEvents loop above) and reassign `id` to match final array position -
   // the chart's click-to-jump handler indexes rendered strips by this id
@@ -1945,7 +1988,16 @@ function evaluateExchange(ex, cfg){
         // this is a completed, already-observed turn - "HDG 60 in ~2m"
         // alone could read as either "took 2m to comply" or "will comply
         // in 2m."
-        results.push({type:'HDG', status: responseStatus, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}`});
+        // Added 2026-09-08 for visual consistency with every other HDG/ALT/
+        // SPD branch, all of which get the state-strip treatment (see
+        // Design Docs/atc-debugger-state-strip.md) - the clean "reached it"
+        // case was the one deliberately scoped OUT of that design ("nothing
+        // to visualize" when assigned===reached), but a real user found the
+        // strip's absence on an otherwise-identical-looking card reads as
+        // something missing rather than "nothing to show." No `diagram`
+        // added (that stays scoped to non-trivial deviations per the
+        // 2026-08-18 decision cited in the design doc) - just the strip.
+        results.push({type:'HDG', status: responseStatus, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}`, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Reached', value:`${target}°${delay!=null?` in ~${delay}m`:''}`}, cell3:{label:'Off by', value:'0°, on target'}}});
       }
     } else if(finalDiff!=null){
       // Was the aircraft actually closing the gap toward the target at the
@@ -2088,9 +2140,21 @@ function evaluateExchange(ex, cfg){
         // the bar for "had a fair chance" is the same either way.
         const elapsedAvail = hdgProgressStart ? finalState.timeMin - hdgProgressStart.timeMin : 0;
         const expectedMaxAvail = cfg.responseDelayMax + (hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target)/180 : 0);
-        const notEnoughTime = !ex.hdgSuperseded && elapsedAvail < expectedMaxAvail;
+        // Extended 2026-09-08 to also cover a SUPERSEDED heading vector with
+        // too little elapsed time to have had a fair shot at compliance -
+        // exact HDG-side port of the identical ALT-side extension (see that
+        // section's own comment for the full real-log motivation, Japanair
+        // 3114). Guarded by `!(ex.hdgSuperseded && sustainedNonProgress)` so
+        // this can never mask a genuine confirmed-stall 'bad' escalation
+        // (AAL3264 and its sibling fixtures) - sustainedNonProgress already
+        // has its own elapsed-time floor to confirm real settled
+        // non-progress before this check ever gets a chance to soften it.
+        const notEnoughTime = elapsedAvail < expectedMaxAvail && !(ex.hdgSuperseded && sustainedNonProgress);
         if(notEnoughTime){
-          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — instruction given shortly before the recording ended, not enough data to judge compliance`});
+          const notEnoughTimeLabel = ex.hdgSuperseded
+            ? `HDG ${target}° — superseded before enough time passed to judge compliance`
+            : `HDG ${target}° — instruction given shortly before the recording ended, not enough data to judge compliance`;
+          results.push({type:'HDG', status:'ok', label:notEnoughTimeLabel});
         } else {
         const status = ex.hdgSuperseded
           ? (sustainedNonProgress ? 'bad' : 'warn')
@@ -2316,7 +2380,9 @@ function evaluateExchange(ex, cfg){
         // this is a completed, already-observed climb/descent - "35,000
         // in ~20m" alone could read as either "took 20m" or "will take
         // 20m."
-        results.push({type:'ALT', status: responseStatus, label:`ALT ${targetFt.toLocaleString()} — reached${note}`});
+        // Added 2026-09-08, same visual-consistency reasoning as HDG's
+        // reached-cleanly branch above - see that comment.
+        results.push({type:'ALT', status: responseStatus, label:`ALT ${targetFt.toLocaleString()} — reached${note}`, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Reached', value:`${targetFt.toLocaleString()}ft${note}`}, cell3:{label:'Off by', value:'0ft, on target'}}});
       }
     } else if(finalState){
       const diff = finalState.alt - targetFt;
@@ -2514,9 +2580,32 @@ function evaluateExchange(ex, cfg){
         const altChangeAvail = Math.abs(targetFt - progressStart.alt);
         const expectedMaxAvail = cfg.responseDelayMax + altChangeAvail/cfg.altMinRate;
         const elapsedAvail = finalState.timeMin - progressStart.timeMin;
-        const notEnoughTime = !ex.altSuperseded && elapsedAvail < expectedMaxAvail;
+        // Extended 2026-09-08 to also cover a SUPERSEDED clearance with too
+        // little elapsed time to have had a fair shot at compliance -
+        // previously this leniency only applied when the clearance was
+        // never superseded (see the comment block above). A ground-issued
+        // clearance re-issued moments after liftoff has the identical "not
+        // enough time" problem, just resolved by ATC moving on instead of
+        // the log ending. Confirmed against a real log (Japanair 3114,
+        // Chitose Delivery): "climb via SID to FL150" cleared at the gate,
+        // superseded just 1 minute after the aircraft's first post-liftoff
+        // sample (progressStart.alt 1,013ft -> finalState.alt 1,616ft) -
+        // nowhere near the ~31 minutes expectedMaxAvail works out to for the
+        // ~14,000ft still needed, yet the old logic unconditionally reported
+        // "stayed low, ended 1,616ft (-13,384ft), fell short" as if the
+        // aircraft had a fair chance and simply came up short. Guarded by
+        // `!(ex.altSuperseded && sustainedNonProgress)` so this can never
+        // mask a genuine confirmed-stall 'bad' escalation (AAL3264 and its
+        // sibling fixtures) - sustainedNonProgress already has its own,
+        // tighter elapsed-time floor (altSpreadElapsed/minSpreadForLiftoffAnchor
+        // above) to confirm real settled non-progress before this check ever
+        // gets a chance to soften it.
+        const notEnoughTime = elapsedAvail < expectedMaxAvail && !(ex.altSuperseded && sustainedNonProgress);
         if(notEnoughTime){
-          results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — instruction given shortly before the recording ended, not enough data to judge compliance`});
+          const notEnoughTimeLabel = ex.altSuperseded
+            ? `ALT ${targetFt.toLocaleString()} — superseded before enough time passed to judge compliance`
+            : `ALT ${targetFt.toLocaleString()} — instruction given shortly before the recording ended, not enough data to judge compliance`;
+          results.push({type:'ALT', status:'ok', label:notEnoughTimeLabel});
         } else {
           const status = ex.altSuperseded ? (sustainedNonProgress ? 'bad' : 'warn') : 'bad';
           // The opposite direction from the bust branch above: the aircraft
@@ -2783,7 +2872,9 @@ function evaluateExchange(ex, cfg){
         const dir = driftKt > 0 ? 'sped up to' : 'slowed to';
         results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`, shortLabel:'Drifted off before the next instruction', strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Reached', value:`${targetKt}kt${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt)`}}});
       } else {
-        results.push({type:'SPD', status: responseStatus, label:`SPD ${targetLabel} — reached${note}`});
+        // Added 2026-09-08, same visual-consistency reasoning as HDG/ALT's
+        // reached-cleanly branches above.
+        results.push({type:'SPD', status: responseStatus, label:`SPD ${targetLabel} — reached${note}`, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Reached', value:`${targetKt}kt${note}`}, cell3:{label:'Off by', value:'0kt, on target'}}});
       }
     } else if(spdWinFull.length){
       const finalSpd = spdWinFull[spdWinFull.length-1];
@@ -2992,6 +3083,13 @@ function evaluatePilotReport(ex, cfg){
   // SPD/RESP filter counts or the flagged-only view.
   if(ex.reportKind === 'goAround'){
     return { results: [{type:'INFO', status:'ok', label:'Player announced going around'}], overall:'ok' };
+  }
+  // Player-initiated requests (reportKind: 'request', see buildExchanges) -
+  // same purely-informational treatment as goAround above: no clearance
+  // target to check compliance against, this entry exists only so the
+  // request itself is visible in the timeline instead of silently missing.
+  if(ex.reportKind === 'request'){
+    return { results: [{type:'INFO', status:'ok', label:'Player-initiated request'}], overall:'ok' };
   }
   const startAlt = ex.atc.state ? ex.atc.state.alt : null;
   if(startAlt==null || !ex.windowStates.length){
