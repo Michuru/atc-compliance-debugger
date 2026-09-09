@@ -4,6 +4,12 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.13.1] - 2026-09-09
+
+### Fixed
+- No Altitude/Assigned/Gap-remaining readout now appears on any card before the aircraft has actually left the ground — a gate clearance parsing a real numeric target (e.g. "climb via SID to FL150," issued during initial delivery) previously carried its full gap number onto every ground-phase card that followed (readback, pushback, taxi, etc.), reading as if the climb was already underway while the aircraft was still parked. The readout now picks up on the first card after actual liftoff.
+- The readout now reads "on target" (e.g. "0ft, on target") instead of a small nonzero number once the gap is already within the axis's own compliance tolerance, matching the wording already used elsewhere in the tool for a clean compliant reach.
+
 ## [1.13.0] - 2026-09-09
 
 ### Added

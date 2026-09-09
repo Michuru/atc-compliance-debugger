@@ -3669,6 +3669,39 @@ function recompute(){
   // Reassigned fresh every run (ex.trios/ex.otherTrios below), never
   // appended, since this whole function re-runs on every tolerance-slider
   // change.
+  // No trio renders for any card before the aircraft's actual liftoff - a
+  // clearance issued at the gate ("climb via SID to FL150" before pushback)
+  // otherwise carries its full numeric gap onto every ground-phase card that
+  // follows (readback, pushback, taxi, etc.), reading as if the climb is
+  // already underway when the aircraft hasn't moved. Same isOnGround/
+  // firstAirborneState anchor already used elsewhere in this file for
+  // ground-issued-clearance delay/progress timing (see evaluateExchange's
+  // ALT/HDG sections) - this just extends it to whether the trio displays
+  // at all, not to any verdict logic (confirmed against a real log:
+  // Japanair 3114/Chitose Delivery's gate clearance, which parses a real
+  // 15,000ft target, not the untracked viaProcedure case). Deliberately
+  // NOT the same Infinity-as-"unbounded" default the departure-vectors scan
+  // below uses for this same groundState0/airborne0 pair - here Infinity
+  // would suppress every trio for the whole log whenever the flight doesn't
+  // start on the ground at all, which is the opposite of what's wanted.
+  const groundState0 = PARSED.states[0];
+  const startedOnGround = !!groundState0 && isOnGround(groundState0);
+  const airborne0 = startedOnGround ? firstAirborneState(PARSED.states, groundState0) : null;
+  // Started on the ground and never got airborne in the whole log (pure
+  // ground-ops sample) - suppress every trio, there's no flight to track.
+  // Never started on the ground at all - no suppression window needed.
+  const preLiftoffEndLineIndex = startedOnGround ? (airborne0 ? airborne0.lineIndex : Infinity) : -Infinity;
+  // Boundary convention note: the guard below is a strict `<`, so the exact
+  // exchange whose lineIndex equals airborne0.lineIndex already counts as
+  // airborne (trio renders). The departure-vectors scan's own liftoffLineIndex
+  // bound (a few hundred lines below) treats that same line as still inside
+  // the pre-liftoff window (`>` to break, not `>=`) - a deliberately
+  // different boundary for a different question (that scan is bounding which
+  // ATC lines to treat as pre-liftoff vectoring instructions; this one is
+  // asking whether the aircraft has already left the ground by this card's
+  // own reading, and the sample AT airborne0.lineIndex is, by definition,
+  // the first one that has).
+
   let openAlt = null, openHdg = null, openSpd = null;
   EXCHANGES.forEach(ex=>{
     if(openAlt && ex.lineIndex >= openAlt.supersededByIdx) openAlt = null;
@@ -3693,11 +3726,24 @@ function recompute(){
       const targetKt = ex.clearance.speed.targetKt != null ? ex.clearance.speed.targetKt : cfgv.approachSpeedLimit;
       openSpd = {targetKt, implied: !!ex.clearance.speed.implied, supersededByIdx: ex.spdSupersededByIdx ?? Infinity, assignedAtLineIndex: ex.lineIndex};
     }
+    // The trio's "on target" wording (see makeTrio below) uses cfg.spdTol
+    // for every SPD trio, including the implied-min-approach-speed case
+    // above - deliberately NOT cfg.speedLimitTol, which is a different,
+    // dedicated noise floor for the unrelated flat 250kt-below-10k
+    // regulatory-cap check (see that check's own comment a few hundred
+    // lines below for why the two are kept separate). The implied-approach
+    // case's own verdict check (evaluatePilotReport's readyForDescent/
+    // worstApp branch) has no tolerance of its own to borrow at all - any
+    // exceedance grades 'warn' outright - so spdTol (the file's one general
+    // ATC-assigned-target convergence tolerance) is the reasonable default
+    // for this purely cosmetic display threshold, not a mismatch with an
+    // existing dedicated constant.
 
     ex.trios = [];
     ex.otherTrios = [];
     const reading = ex.atc.state;
     if(!reading) return; // no state to read - omit the trio entirely rather than render a broken cell
+    if(ex.lineIndex < preLiftoffEndLineIndex) return; // still on the ground pre-departure - no trio yet
 
     // "Own axis addressed" is about the clearance STRUCTURALLY naming the
     // axis, independent of whether that particular clearance is trackable
@@ -3716,25 +3762,31 @@ function recompute(){
     const fmtFt = v => `${Math.round(v).toLocaleString()}ft`;
     const fmtHdg = v => `${Math.round(v)}°`;
     const fmtKt = v => `${Math.round(v)}kt`;
-    const makeTrio = (axisLabel, axisType, readingVal, open, fmt) => {
+    const makeTrio = (axisLabel, axisType, readingVal, open, fmt, tol) => {
       const assignedVal = open.targetFt ?? open.targetHdg ?? open.targetKt;
       const gap = Math.abs(readingVal - assignedVal);
       const assignedDisplay = (axisType==='SPD' && open.implied) ? `${fmt(assignedVal)} (min approach)` : fmt(assignedVal);
+      // Within the axis's own existing compliance tolerance reads as "on
+      // target," not a small nonzero number that looks like an open
+      // deviation - same "0ft/0°/0kt, on target" wording the now-retired
+      // per-check strip cells already used for a reached-cleanly axis
+      // (Design Docs/atc-debugger-state-strip.md), not a new convention.
+      const gapDisplay = gap <= tol ? `${fmt(0)}, on target` : fmt(gap);
       return {
         axis: axisType,
         assignedAtLineIndex: open.assignedAtLineIndex,
         cells: {
           cell1:{label:axisLabel, value: fmt(readingVal)},
           cell2:{label:'Assigned', value: assignedDisplay},
-          cell3:{label:'Gap remaining', value: fmt(gap)}
+          cell3:{label:'Gap remaining', value: gapDisplay}
         }
       };
     };
 
     const candidates = [];
-    if(openAlt) candidates.push({axisType:'ALT', open:openAlt, own: !!ex.clearance.altitude, trio: makeTrio('Altitude','ALT', reading.alt, openAlt, fmtFt)});
-    if(openHdg) candidates.push({axisType:'HDG', open:openHdg, own: !!ex.clearance.heading, trio: makeTrio('Heading','HDG', reading.hdg, openHdg, fmtHdg)});
-    if(openSpd) candidates.push({axisType:'SPD', open:openSpd, own: !!ex.clearance.speed, trio: makeTrio('Speed','SPD', reading.spd, openSpd, fmtKt)});
+    if(openAlt) candidates.push({axisType:'ALT', open:openAlt, own: !!ex.clearance.altitude, trio: makeTrio('Altitude','ALT', reading.alt, openAlt, fmtFt, cfgv.altTol)});
+    if(openHdg) candidates.push({axisType:'HDG', open:openHdg, own: !!ex.clearance.heading, trio: makeTrio('Heading','HDG', reading.hdg, openHdg, fmtHdg, cfgv.hdgTol)});
+    if(openSpd) candidates.push({axisType:'SPD', open:openSpd, own: !!ex.clearance.speed, trio: makeTrio('Speed','SPD', reading.spd, openSpd, fmtKt, cfgv.spdTol)});
     if(!candidates.length) return;
 
     // Relevance split: own-axis cards show every axis they address in the
