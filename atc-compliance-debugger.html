@@ -140,6 +140,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .cat-note-inline{font-size:11.5px;color:var(--amber);margin-top:6px;}
 .cat-note-inline .link{text-decoration:underline;cursor:pointer;margin-left:6px;color:var(--amber);}
 .cat-note-inline .link:hover{color:var(--text);}
+.header-disclaimer{font-size:11px;color:var(--text-dimmer);margin-top:6px;max-width:520px;}
 .cat-table-wrap{overflow-x:auto;}
 .cat-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;}
 .cat-table th{text-align:left;color:var(--text-dimmer);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;padding:6px 12px 6px 0;border-bottom:1px solid var(--line);}
@@ -204,6 +205,10 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .badge.ok{border-color:var(--green-dim);color:var(--green);background:rgba(61,220,145,0.06);}
 .badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,182,72,0.06);}
 .badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,92,108,0.08);}
+.badge.flag{border-style:dashed;}
+.trio-group{display:block;}
+.trio-axis-label{font-size:9px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.5px;margin-top:8px;}
+.carryover-note{font-size:11.5px;color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin-top:8px;}
 .state-strip{display:flex;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:8px;background:var(--panel-2);}
 .state-strip.warn{border-color:var(--amber-dim);}
 .state-strip.bad{border-color:var(--red-dim);}
@@ -260,6 +265,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
         <div class="cat-note-inline" id="hCatNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
+        <div class="header-disclaimer">Every number in this tool comes from a logged radio-activity sample, not continuous real-time tracking — gaps of a minute or more between values are normal.</div>
       </div>
       <div class="statgrid" id="hStats"></div>
       <button class="ghost" id="btnConfig">⚙ Thresholds</button>
@@ -1453,6 +1459,8 @@ function buildExchanges(parsed){
       windowStates, altWindowStates: [], hdgWindowStates: [],
       altSuperseded:false, altSupersededBy:null, altSupersededByIdx:null,
       hdgSuperseded:false, hdgSupersededBy:null, hdgSupersededByIdx:null,
+      spdWindowStates:[], spdSuperseded:false, spdSupersededBy:null, spdSupersededByIdx:null,
+      squawkWindowStates:[], squawkSuperseded:false, squawkSupersededBy:null, squawkSupersededByIdx:null,
       isLast:false,
       isPilotReport: true,
       reportKind: 'readyForDescent',
@@ -1497,6 +1505,8 @@ function buildExchanges(parsed){
         windowStates: [], altWindowStates: [], hdgWindowStates: [],
         altSuperseded:false, altSupersededBy:null, altSupersededByIdx:null,
         hdgSuperseded:false, hdgSupersededBy:null, hdgSupersededByIdx:null,
+        spdWindowStates:[], spdSuperseded:false, spdSupersededBy:null, spdSupersededByIdx:null,
+        squawkWindowStates:[], squawkSuperseded:false, squawkSupersededBy:null, squawkSupersededByIdx:null,
         isLast:false,
         isPilotReport: true,
         reportKind: 'goAround'
@@ -1540,6 +1550,8 @@ function buildExchanges(parsed){
       windowStates: [], altWindowStates: [], hdgWindowStates: [],
       altSuperseded:false, altSupersededBy:null, altSupersededByIdx:null,
       hdgSuperseded:false, hdgSupersededBy:null, hdgSupersededByIdx:null,
+      spdWindowStates:[], spdSuperseded:false, spdSupersededBy:null, spdSupersededByIdx:null,
+      squawkWindowStates:[], squawkSuperseded:false, squawkSupersededBy:null, squawkSupersededByIdx:null,
       isLast:false,
       isPilotReport: true,
       reportKind: 'request'
@@ -1742,7 +1754,7 @@ function evaluateCrossingRestriction(cr, altWin, cfg){
   const label = status==='ok'
     ? `ALT ${cr.ft.toLocaleString()} — crossed ${cr.fixName} at ${actualAlt}ft, complied`
     : `ALT ${cr.ft.toLocaleString()} — crossed ${cr.fixName} at ${actualAlt}ft (${diff.toLocaleString()}ft ${cr.direction==='above'?'under':cr.direction==='below'?'over':'off'})`;
-  return {type:'ALT', status, label, shortLabel:''};
+  return {type:'ALT', status, label};
 }
 
 // Field elevation, read straight from the log's own parked PlayerState
@@ -2061,7 +2073,7 @@ function evaluateExchange(ex, cfg){
           results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then continued turning to ${Math.round(worstDrift.hdg)}° — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
         } else {
           const status = driftDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
-          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`, shortLabel:'Drifted off before the next instruction', strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Reached', value:`${target}°${delay!=null?` in ~${delay}m`:''}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.hdg)}° (${driftDiff}° off)`}}});
+          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
         }
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
@@ -2077,7 +2089,7 @@ function evaluateExchange(ex, cfg){
         // something missing rather than "nothing to show." No `diagram`
         // added (that stays scoped to non-trivial deviations per the
         // 2026-08-18 decision cited in the design doc) - just the strip.
-        results.push({type:'HDG', status: responseStatus, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}`, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Reached', value:`${target}°${delay!=null?` in ~${delay}m`:''}`}, cell3:{label:'Off by', value:'0°, on target'}}});
+        results.push({type:'HDG', status: responseStatus, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}`});
       }
     } else if(finalDiff!=null){
       // Was the aircraft actually closing the gap toward the target at the
@@ -2144,7 +2156,7 @@ function evaluateExchange(ex, cfg){
         // instruction when there wasn't one. The full prose label already
         // says "new instructions given before arriving," but the strip
         // (the part actually glanced at) carried no such context.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, shortLabel:'', carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'At handoff', value:`${Math.round(finalState.hdg)}° (${fmtTime(finalState.timeMin)})`}, cell3:{label:'Gap remaining', value:`${Math.round(finalDiff)}°, moving toward it`}}});
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, shortLabel:'New instructions given before arriving', carryover:{targetHdg:target, gap:Math.round(finalDiff)}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -2245,7 +2257,7 @@ function evaluateExchange(ex, cfg){
         const notEnoughTime = elapsedAvail < expectedMaxAvail && !(ex.hdgSuperseded && sustainedNonProgress);
         if(notEnoughTime){
           const notEnoughTimeLabel = ex.hdgSuperseded
-            ? `HDG ${target}° — superseded before enough time passed to judge compliance`
+            ? `HDG ${target}° — new instructions given before enough time passed to judge compliance`
             : `HDG ${target}° — instruction given shortly before the recording ended, not enough data to judge compliance`;
           results.push({type:'HDG', status:'ok', label:notEnoughTimeLabel});
         } else {
@@ -2262,8 +2274,7 @@ function evaluateExchange(ex, cfg){
         // this clearance's window closed, which can be well before "now" if
         // it was superseded. Matches the "ended up at X°" wording the
         // approach-intercept branch above already uses for the same concept.
-        const stripNote = !turnedMeaningfully ? 'no turn detected' : (status==='warn' ? 'fell short' : 'off target');
-        results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°, ${diff}° off`, shortLabel:'', diagram:{target, actual, status}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Ended at', value:`${actual}°`}, cell3:{label:'Off by', value:`${diff}°, ${stripNote}`}}});
+        results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°, ${diff}° off`, diagram:{target, actual, status}});
         }
         }
       }
@@ -2288,7 +2299,13 @@ function evaluateExchange(ex, cfg){
       // pointRestriction branch below (and viaProcedure above) - a missing
       // bracket sample means the crossing itself wasn't observed, not that
       // nothing should be said about it at all.
-      results.push(crResult || {type:'ALT', status:'ok', label:`ALT ${crossingRestriction.ft.toLocaleString()} — crossing restriction at ${crossingRestriction.fixName} (not independently verified from available states)`});
+      // flagBadge:true + a "Also: cross FIX at..." shortLabel (design review
+      // finding 12) - this leading crossing restriction gets its own
+      // distinct badge style, separate from the final target's own trio,
+      // since `Assigned` on the trio must keep reflecting only the real
+      // ongoing target, never this compound clearance's crossing number.
+      const flagLabel = `Also: cross ${crossingRestriction.fixName} at ${crossingRestriction.direction ? `or ${crossingRestriction.direction} ` : ''}${crossingRestriction.ft.toLocaleString()}ft`;
+      results.push({...(crResult || {type:'ALT', status:'ok', label:`ALT ${crossingRestriction.ft.toLocaleString()} — crossing restriction at ${crossingRestriction.fixName} (not independently verified from available states)`}), shortLabel:flagLabel, flagBadge:true});
     }
     if(vfrCeiling){
       // See parseAltitudeClearance - any altitude on the correct side of
@@ -2423,8 +2440,7 @@ function evaluateExchange(ex, cfg){
       // target in the direction of travel), so this label now finally
       // matches what the logic has always meant.
       const throughVerb = action==='climb' ? 'climbed through' : 'descended through';
-      const bustGap = Math.round(Math.abs(finalState.alt - targetFt));
-      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — ${throughVerb} the assigned altitude`, shortLabel:'', diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'bad', tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${bustGap.toLocaleString()}ft, ${throughVerb}`}}});
+      results.push({type:'ALT', status:'bad', label:`ALT ${targetFt.toLocaleString()} — ${throughVerb} the assigned altitude`, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'bad', tol:cfg.altTol}});
     } else if(compliedAt){
       const delay = progressStart ? compliedAt.timeMin - progressStart.timeMin : null;
       // A big altitude change simply takes longer to fly than a small one -
@@ -2482,7 +2498,7 @@ function evaluateExchange(ex, cfg){
         const driftFt = Math.round(worstDrift.alt - targetFt);
         const status = Math.abs(driftFt) <= cfg.altTol*2 ? 'warn' : 'bad';
         const dir = driftFt > 0 ? 'climbed to' : 'descended to';
-        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`, shortLabel:'Drifted off before the next instruction', strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Reached', value:`${targetFt.toLocaleString()}ft${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft)`}}});
+        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`});
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
         // this is a completed, already-observed climb/descent - "35,000
@@ -2490,7 +2506,7 @@ function evaluateExchange(ex, cfg){
         // 20m."
         // Added 2026-09-08, same visual-consistency reasoning as HDG's
         // reached-cleanly branch above - see that comment.
-        results.push({type:'ALT', status: responseStatus, label:`ALT ${targetFt.toLocaleString()} — reached${note}`, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Reached', value:`${targetFt.toLocaleString()}ft${note}`}, cell3:{label:'Off by', value:'0ft, on target'}}});
+        results.push({type:'ALT', status: responseStatus, label:`ALT ${targetFt.toLocaleString()} — reached${note}`});
       }
     } else if(finalState){
       const diff = finalState.alt - targetFt;
@@ -2600,7 +2616,7 @@ function evaluateExchange(ex, cfg){
         // strip cell2 'Aircraft now'->'At handoff' + timestamp - see the
         // matching HDG carryover branch's comment above for the real-log
         // motivation (Japanair 3114, 2026-09-08).
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} assigned — ${progress}, new instructions given before arriving`, shortLabel:'', carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'At handoff', value:`${actualAltStr}ft (${fmtTime(finalState.timeMin)})`}, cell3:{label:'Gap remaining', value:`${altGap.toLocaleString()}ft, moving toward it`}}});
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} assigned — ${progress}, new instructions given before arriving`, shortLabel:'New instructions given before arriving', carryover:{targetFt, gap:altGap}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}});
       } else {
         let label;
         if(action==='descend' && diff > cfg.altTol){
@@ -2715,7 +2731,7 @@ function evaluateExchange(ex, cfg){
         const notEnoughTime = elapsedAvail < expectedMaxAvail && !(ex.altSuperseded && sustainedNonProgress);
         if(notEnoughTime){
           const notEnoughTimeLabel = ex.altSuperseded
-            ? `ALT ${targetFt.toLocaleString()} — superseded before enough time passed to judge compliance`
+            ? `ALT ${targetFt.toLocaleString()} — new instructions given before enough time passed to judge compliance`
             : `ALT ${targetFt.toLocaleString()} — instruction given shortly before the recording ended, not enough data to judge compliance`;
           results.push({type:'ALT', status:'ok', label:notEnoughTimeLabel});
         } else {
@@ -2725,9 +2741,7 @@ function evaluateExchange(ex, cfg){
           // than crossing through it, so this is "never reached," never
           // "through" - confirms the direction-strict bust condition above
           // really is the only case that earns the through-wording.
-          const neverReachedGap = Math.round(Math.abs(finalState.alt - targetFt));
-          const neverReachedNote = status==='warn' ? 'fell short' : 'never reached';
-          results.push({type:'ALT', status, label, shortLabel:'', diagram:{target:targetFt, actual:Math.round(finalState.alt), status, tol:cfg.altTol}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Ended at', value:`${Math.round(finalState.alt).toLocaleString()}ft`}, cell3:{label:'Off by', value:`${neverReachedGap.toLocaleString()}ft, ${neverReachedNote}`}}});
+          results.push({type:'ALT', status, label, diagram:{target:targetFt, actual:Math.round(finalState.alt), status, tol:cfg.altTol}});
         }
       }
     }
@@ -2906,24 +2920,24 @@ function evaluateExchange(ex, cfg){
       // converge-on-a-target check family (see stateStripHtml's own
       // comment). A `strip` still tells the same at-a-glance story without
       // reopening that scoping decision.
-      results.push({type:'SPD', status, label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`, shortLabel:`${cfg.speedBelow10k}kt limit below 10,000ft`, strip:{cell1:{label:'Limit', value:`${cfg.speedBelow10k}kt`}, cell2:{label:'Reached', value:`${Math.round(worst250.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.speedBelow10k}kt below 10,000ft — reached ${Math.round(worst250.spd)}kt (+${over}kt over)`});
     }
     if(worstApp){
       const over = Math.round(worstApp.spd - cfg.approachSpeedLimit);
-      results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`, shortLabel:`Approach speed target below ${Math.round(approachAltAbs).toLocaleString()}ft`, strip:{cell1:{label:'Limit', value:`${cfg.approachSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstApp.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+      results.push({type:'SPD', status:'warn', label:`Approach speed target ≤${cfg.approachSpeedLimit}kt below ${Math.round(approachAltAbs).toLocaleString()}ft — reached ${Math.round(worstApp.spd)}kt (+${over}kt over)`});
     }
     if(worstBravo){
       const over = Math.round(worstBravo.spd - cfg.classBUnderlyingSpeedLimit);
       // Same hard-cap-with-no-tolerance gap as the 250kt/10,000ft check
       // above, same fix (own dedicated cfg.speedLimitTol, not cfg.spdTol).
       const status = over <= cfg.speedLimitTol ? 'warn' : 'bad';
-      results.push({type:'SPD', status, label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`, shortLabel:`Class B underlying speed limit (14 CFR 91.117(c))`, strip:{cell1:{label:'Limit', value:`${cfg.classBUnderlyingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(worstBravo.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+      results.push({type:'SPD', status, label:`Speed limit ${cfg.classBUnderlyingSpeedLimit}kt beneath Class B (14 CFR 91.117(c)) — reached ${Math.round(worstBravo.spd)}kt (+${over}kt over)`});
     }
     if(ex.clearance.landing){
       const last = win[win.length-1];
       if(last && last.spd > cfg.landingSpeedLimit){
         const over = Math.round(last.spd - cfg.landingSpeedLimit);
-        results.push({type:'SPD', status:'warn', label:`Landing speed target ≤${cfg.landingSpeedLimit}kt — reached ${Math.round(last.spd)}kt (+${over}kt over)`, shortLabel:'Landing speed target', strip:{cell1:{label:'Limit', value:`${cfg.landingSpeedLimit}kt`}, cell2:{label:'Reached', value:`${Math.round(last.spd)}kt`}, cell3:{label:'Over by', value:`+${over}kt`}}});
+        results.push({type:'SPD', status:'warn', label:`Landing speed target ≤${cfg.landingSpeedLimit}kt — reached ${Math.round(last.spd)}kt (+${over}kt over)`});
       }
     }
   }
@@ -2982,11 +2996,11 @@ function evaluateExchange(ex, cfg){
         const driftKt = Math.round(worstDrift.spd - targetKt);
         const status = Math.abs(driftKt) <= cfg.spdTol*2 ? 'warn' : 'bad';
         const dir = driftKt > 0 ? 'sped up to' : 'slowed to';
-        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`, shortLabel:'Drifted off before the next instruction', strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Reached', value:`${targetKt}kt${note}`}, cell3:{label:'Drifted to', value:`${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt)`}}});
+        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`});
       } else {
         // Added 2026-09-08, same visual-consistency reasoning as HDG/ALT's
         // reached-cleanly branches above.
-        results.push({type:'SPD', status: responseStatus, label:`SPD ${targetLabel} — reached${note}`, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Reached', value:`${targetKt}kt${note}`}, cell3:{label:'Off by', value:'0kt, on target'}}});
+        results.push({type:'SPD', status: responseStatus, label:`SPD ${targetLabel} — reached${note}`});
       }
     } else if(spdWinFull.length){
       const finalSpd = spdWinFull[spdWinFull.length-1];
@@ -3048,7 +3062,7 @@ function evaluateExchange(ex, cfg){
         // strip cell2 'Aircraft now'->'At handoff' + timestamp - see the
         // matching HDG carryover branch's comment above for the real-log
         // motivation (Japanair 3114, 2026-09-08).
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} assigned — ${progressVerb}, new instructions given before arriving`, shortLabel:'', carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'At handoff', value:`${actualSpdVal}kt (${fmtTime(finalSpd.timeMin)})`}, cell3:{label:'Gap remaining', value:`${spdGap}kt, moving toward it`}}});
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} assigned — ${progressVerb}, new instructions given before arriving`, shortLabel:'New instructions given before arriving', carryover:{targetKt, implied, gap:spdGap}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetLabel} — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;
@@ -3073,8 +3087,7 @@ function evaluateExchange(ex, cfg){
           (action==='maintain' && Math.abs(finalSpd.spd - targetKt) > Math.abs(startState.spd - targetKt) + cfg.spdTol)
         );
         const status = (ex.spdSuperseded && !regressed) ? 'warn' : 'bad';
-        const spdNote = status==='warn' ? 'fell short' : 'never reached';
-        results.push({type:'SPD', status, label, shortLabel:'', diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Ended at', value:`${Math.round(finalSpd.spd)}kt`}, cell3:{label:'Off by', value:`${Math.abs(diff)}kt, ${spdNote}`}}});
+        results.push({type:'SPD', status, label, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status, tol:cfg.spdTol}});
       }
     }
   }
@@ -3643,13 +3656,125 @@ function recompute(){
   cfgv.arrivalFieldElevation = PARSED.meta.fieldElevations ? PARSED.meta.fieldElevations.arrival : null;
   cfgv.topOfClimbLineIndex = PARSED.meta.topOfClimbLineIndex;
   EXCHANGES.forEach(ex=>{ ex.eval = ex.isPilotReport ? evaluatePilotReport(ex, cfgv) : evaluateExchange(ex, cfgv); });
+
+  // ---- Per-axis "current open, trackable target" tracker + trio pass ----
+  // See Design Docs/atc-debugger-timeline-cards.md. Walks EXCHANGES in
+  // chronological order (already sorted by lineIndex, see buildExchanges)
+  // tracking the currently-open ALT/HDG/SPD target independently, mirroring
+  // the existing altSuperseded/hdgSuperseded/spdSuperseded bookkeeping. An
+  // axis is open at exchange N iff N.lineIndex < opener.*SupersededByIdx
+  // (?? Infinity when never superseded) - checked (and closed) BEFORE this
+  // exchange's own clearance (if any) potentially reopens it, so a card's
+  // own new clearance immediately becomes its own "Assigned" value.
+  // Reassigned fresh every run (ex.trios/ex.otherTrios below), never
+  // appended, since this whole function re-runs on every tolerance-slider
+  // change.
+  let openAlt = null, openHdg = null, openSpd = null;
+  EXCHANGES.forEach(ex=>{
+    if(openAlt && ex.lineIndex >= openAlt.supersededByIdx) openAlt = null;
+    if(openHdg && ex.lineIndex >= openHdg.supersededByIdx) openHdg = null;
+    if(openSpd && ex.lineIndex >= openSpd.supersededByIdx) openSpd = null;
+
+    if(ex.clearance.altitude){
+      // Excluded from tracking entirely (no real convergence target):
+      // viaProcedure (no target), pointRestriction (a point check, not a
+      // gap-remaining target), vfrCeiling (a band, not a target), and
+      // atDiscretion (a legitimately un-graded gap) - same exclusion
+      // atc-debugger-state-strip.md already scoped its own strip out of.
+      const a = ex.clearance.altitude;
+      if(!a.viaProcedure && !a.pointRestriction && !a.vfrCeiling && !a.atDiscretion){
+        openAlt = {targetFt:a.targetFt, supersededByIdx: ex.altSupersededByIdx ?? Infinity, assignedAtLineIndex: ex.lineIndex};
+      }
+    }
+    if(ex.clearance.heading){
+      openHdg = {targetHdg: ex.clearance.heading.targetHdg, supersededByIdx: ex.hdgSupersededByIdx ?? Infinity, assignedAtLineIndex: ex.lineIndex};
+    }
+    if(ex.clearance.speed){
+      const targetKt = ex.clearance.speed.targetKt != null ? ex.clearance.speed.targetKt : cfgv.approachSpeedLimit;
+      openSpd = {targetKt, implied: !!ex.clearance.speed.implied, supersededByIdx: ex.spdSupersededByIdx ?? Infinity, assignedAtLineIndex: ex.lineIndex};
+    }
+
+    ex.trios = [];
+    ex.otherTrios = [];
+    const reading = ex.atc.state;
+    if(!reading) return; // no state to read - omit the trio entirely rather than render a broken cell
+
+    // "Own axis addressed" is about the clearance STRUCTURALLY naming the
+    // axis, independent of whether that particular clearance is trackable
+    // (an untrackable ALT clearance like viaProcedure still "addresses"
+    // ALT - it just produces no ALT trio at all, and doesn't promote a
+    // separately-open HDG/SPD into relevance via the no-own-axis fallback
+    // below).
+    const hasOwnAxis = !!ex.clearance.altitude || !!ex.clearance.heading || !!ex.clearance.speed;
+
+    const worstStatusFor = axisType => {
+      const rs = ex.eval.results.filter(r=>r.type===axisType);
+      if(rs.some(r=>r.status==='bad')) return 'bad';
+      if(rs.some(r=>r.status==='warn')) return 'warn';
+      return 'ok';
+    };
+    const fmtFt = v => `${Math.round(v).toLocaleString()}ft`;
+    const fmtHdg = v => `${Math.round(v)}°`;
+    const fmtKt = v => `${Math.round(v)}kt`;
+    const makeTrio = (axisLabel, axisType, readingVal, open, fmt) => {
+      const assignedVal = open.targetFt ?? open.targetHdg ?? open.targetKt;
+      const gap = Math.abs(readingVal - assignedVal);
+      const assignedDisplay = (axisType==='SPD' && open.implied) ? `${fmt(assignedVal)} (min approach)` : fmt(assignedVal);
+      return {
+        axis: axisType,
+        assignedAtLineIndex: open.assignedAtLineIndex,
+        cells: {
+          cell1:{label:axisLabel, value: fmt(readingVal)},
+          cell2:{label:'Assigned', value: assignedDisplay},
+          cell3:{label:'Gap remaining', value: fmt(gap)}
+        }
+      };
+    };
+
+    const candidates = [];
+    if(openAlt) candidates.push({axisType:'ALT', open:openAlt, own: !!ex.clearance.altitude, trio: makeTrio('Altitude','ALT', reading.alt, openAlt, fmtFt)});
+    if(openHdg) candidates.push({axisType:'HDG', open:openHdg, own: !!ex.clearance.heading, trio: makeTrio('Heading','HDG', reading.hdg, openHdg, fmtHdg)});
+    if(openSpd) candidates.push({axisType:'SPD', open:openSpd, own: !!ex.clearance.speed, trio: makeTrio('Speed','SPD', reading.spd, openSpd, fmtKt)});
+    if(!candidates.length) return;
+
+    // Relevance split: own-axis cards show every axis they address in the
+    // head; a card with no clearance of its own (request/goAround/
+    // readyForDescent, or a plain non-clearance ATC line) treats the single
+    // most-recently-assigned open axis as relevant instead, tiebreaking on
+    // equal lineIndex by fixed ALT>HDG>SPD priority - both per
+    // Design Docs/atc-debugger-timeline-cards.md's Relevance split section.
+    let relevantAxes;
+    if(hasOwnAxis){
+      relevantAxes = new Set(candidates.filter(c=>c.own).map(c=>c.axisType));
+    } else {
+      const priority = {ALT:0, HDG:1, SPD:2};
+      let best = candidates[0];
+      for(const c of candidates){
+        if(c.open.assignedAtLineIndex > best.open.assignedAtLineIndex ||
+           (c.open.assignedAtLineIndex === best.open.assignedAtLineIndex && priority[c.axisType] < priority[best.axisType])){
+          best = c;
+        }
+      }
+      relevantAxes = new Set([best.axisType]);
+    }
+
+    candidates.forEach(c=>{
+      if(relevantAxes.has(c.axisType)) ex.trios.push({...c.trio, status: worstStatusFor(c.axisType)});
+      else ex.otherTrios.push({...c.trio, status:''}); // neutral - never colored green, it wasn't checked on this card
+    });
+  });
+
   // A clearance that was still in progress (not busted) when a later
-  // instruction superseded it gets a plain "new instructions given before
-  // arriving" note on its OWN card (see
-  // evaluateExchange) - the altitude/time it
-  // eventually reached belongs to the moment it was superseded, not to
-  // this clearance's own readback, so surface that half of the story on
-  // the superseding exchange instead of backdating it onto this one.
+  // instruction superseded it gets a "Previous target not yet reached"
+  // inline callout on the INTERRUPTING card (see evaluateExchange's
+  // carryover branches) - the altitude/heading/speed it eventually reached
+  // belongs to the moment it was superseded, not to this clearance's own
+  // readback, so surface that half of the story on the superseding
+  // exchange instead of backdating it onto this one. Kept as a real
+  // results[] entry (not a pure render artifact) so it keeps contributing
+  // to overall/matchesFilter/flagged/the chart marker color exactly like
+  // every other result - carryoverNote:true routes renderStrip to the
+  // dedicated .carryover-note callout instead of the ordinary badge row.
   // altSupersededByIdx/hdgSupersededByIdx are lineIndex values, not array
   // positions (see buildExchanges) - look the superseding exchange up by
   // lineIndex rather than indexing EXCHANGES directly, since player-report
@@ -3660,31 +3785,28 @@ function recompute(){
       if(r.type==='ALT' && r.carryover && ex.altSupersededByIdx!=null){
         const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.altSupersededByIdx);
         if(!supersedingEx) return;
-        const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
         supersedingEx.eval.results.push({
-          type:'ALT', status:'ok',
-          label:`ATC assigned new ALT before reaching ${r.carryover.targetFt.toLocaleString()}ft${issuedAt?` (issued ${issuedAt})`:''}`
+          type:'ALT', status:'ok', carryoverNote:true,
+          label:`Previous target not yet reached: ${r.carryover.targetFt.toLocaleString()}ft (was ${r.carryover.gap.toLocaleString()}ft short when reassigned)`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
       if(r.type==='HDG' && r.carryover && ex.hdgSupersededByIdx!=null){
         const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.hdgSupersededByIdx);
         if(!supersedingEx) return;
-        const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
         supersedingEx.eval.results.push({
-          type:'HDG', status:'ok',
-          label:`ATC assigned new HDG before reaching ${r.carryover.targetHdg}°${issuedAt?` (issued ${issuedAt})`:''}`
+          type:'HDG', status:'ok', carryoverNote:true,
+          label:`Previous target not yet reached: ${r.carryover.targetHdg}° (was ${r.carryover.gap}° off when reassigned)`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
       if(r.type==='SPD' && r.carryover && ex.spdSupersededByIdx!=null){
         const supersedingEx = EXCHANGES.find(ex2 => ex2.lineIndex === ex.spdSupersededByIdx);
         if(!supersedingEx) return;
-        const issuedAt = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : null;
-        const targetLabel = r.carryover.implied ? `${r.carryover.targetKt}kt minimum approach speed` : `${r.carryover.targetKt}kt`;
+        const valueLabel = r.carryover.implied ? `${r.carryover.targetKt}kt (min approach)` : `${r.carryover.targetKt}kt`;
         supersedingEx.eval.results.push({
-          type:'SPD', status:'ok',
-          label:`ATC assigned new SPD before reaching ${targetLabel}${issuedAt?` (issued ${issuedAt})`:''}`
+          type:'SPD', status:'ok', carryoverNote:true,
+          label:`Previous target not yet reached: ${valueLabel} (was ${r.carryover.gap}kt off when reassigned)`
         });
         if(supersedingEx.eval.overall==='none') supersedingEx.eval.overall='ok';
       }
@@ -4389,69 +4511,45 @@ function headingCompassSvg({target, actual, status, actualLabel='actual'}){
   </div>`;
 }
 
-// Linear equivalent of headingCompassSvg for ALT/SPD assigned-vs-actual
-// comparisons, where "direction" is a straight line, not a compass rose: a
-// magenta dashed tick for the assigned target, a solid status-colored dot
-// for where the aircraft actually ended up (or currently sits, for a
-// carryover), and a dim shaded band around the target showing the
-// tolerance actually used to judge compliance. Values are clamped into a
-// fixed-width track rather than drawn to true scale - a 20,000ft overshoot
-// and a 200ft overshoot both need to render as *some* visible offset, not
-// one dot pinned uselessly at the edge and the other invisible on top of
-// the target tick.
-function linearBarSvg({target, actual, status, unit, tol, actualLabel='actual'}){
-  const color = status==='bad' ? 'var(--red)' : status==='warn' ? 'var(--amber)' : 'var(--green)';
-  const w=150, pad=8, trackY=14;
-  const cx = w/2;
-  const diff = actual - target;
-  const range = Math.max(Math.abs(diff)*1.2, (tol||1)*4, 1);
-  const scale = (w/2 - pad) / range;
-  const ax = Math.max(pad, Math.min(w-pad, cx + diff*scale));
-  const tolPx = tol ? Math.min(w/2-pad, tol*scale) : 0;
-  const fmt = n => Math.round(n).toLocaleString();
-  return `<div class="mini-diagram">
-    <svg width="${w}" height="${trackY+8}" viewBox="0 0 ${w} ${trackY+8}">
-      <line x1="${pad}" y1="${trackY}" x2="${w-pad}" y2="${trackY}" stroke="var(--line)" stroke-width="1.5"/>
-      ${tolPx ? `<rect x="${(cx-tolPx).toFixed(1)}" y="${trackY-4}" width="${(tolPx*2).toFixed(1)}" height="8" fill="var(--green-dim)" opacity="0.4"/>` : ''}
-      <line x1="${cx}" y1="${trackY-7}" x2="${cx}" y2="${trackY+7}" stroke="var(--magenta)" stroke-width="2" stroke-dasharray="3,2"/>
-      <circle cx="${ax.toFixed(1)}" cy="${trackY}" r="4" fill="${color}"/>
-    </svg>
-    <div class="mini-diagram-legend">
-      <span style="color:var(--magenta)">┄ assigned ${fmt(target)}${unit}</span>
-      <span style="color:${color}">● ${actualLabel} ${fmt(actual)}${unit}</span>
-    </div>
-  </div>`;
-}
-
-// At-a-glance assigned/current/gap readout, rendered in the ALWAYS-VISIBLE
-// collapsed card (unlike headingCompassSvg/linearBarSvg above, which only
-// render in the click-to-expand .strip-detail section) - added because a
-// user reading the collapsed view alone had no way to see assigned-vs-actual
-// without parsing the full prose label. Deliberately a separate `strip`
-// field on the result object rather than reusing `diagram`: reusing
-// `diagram` would also make flat-limit SPD checks (250kt-below-10k etc.)
-// start rendering linearBarSvg in the detail view too, reversing the
-// 2026-08-18 decision to scope that graphical treatment to only the
-// converge-on-a-target check family (see atc-compliance-debugger.NOTES.md).
-// A dumb 3-cell template - each push site in evaluateExchange decides what
-// goes in each cell directly (same as it already decides `label` text),
-// nothing per-check-type branches inside this function.
+// At-a-glance assigned/current/gap readout, reused for both the always-
+// visible collapsed head (ex.trios, the relevant axes) and the click-to-
+// expand toggle section (ex.otherTrios, carried-forward/informational) -
+// see Design Docs/atc-debugger-timeline-cards.md. A dumb 3-cell template -
+// the trio pass in recompute() decides what goes in each cell directly.
 function stateStripHtml({cell1, cell2, cell3}, status){
   const cellHtml = c => `<div class="state-cell"><div class="lbl">${escapeHtml(c.label)}</div><div class="val">${escapeHtml(c.value)}</div></div>`;
   return `<div class="state-strip ${status}">${cellHtml(cell1)}${cellHtml(cell2)}${cellHtml(cell3)}</div>`;
+}
+// A group of one or more trios, wrapped with a per-trio axis-caption
+// whenever there's more than one in the same location (two own-axes
+// stacked in the head, or every carried-forward trio in the toggle) - see
+// Design Docs/atc-debugger-timeline-cards.md's Relevance split section.
+// `labelAlways` is true for the toggle section (every otherTrios entry
+// gets a caption regardless of count, to distinguish it from the
+// surrounding KV block/diagram) and false for the head (caption only
+// appears once a second trio is actually present).
+const AXIS_NAMES = {ALT:'Altitude', HDG:'Heading', SPD:'Speed'};
+function trioGroupHtml(trios, labelAlways){
+  if(!trios.length) return '';
+  const showLabel = labelAlways || trios.length > 1;
+  return `<div class="trio-group">${trios.map(t=>
+    `${showLabel ? `<div class="trio-axis-label">${AXIS_NAMES[t.axis]}</div>` : ''}${stateStripHtml(t.cells, t.status)}`
+  ).join('')}</div>`;
+}
+// The interrupted-carryover callout - see recompute()'s carryoverNote pass.
+function carryoverNoteHtml(ex){
+  return ex.eval.results.filter(r=>r.carryoverNote).map(r=>`<div class="carryover-note">${escapeHtml(r.label)}</div>`).join('');
 }
 
 function renderStrip(ex){
   const overall = ex.eval.overall;
   const cls = overall==='ok'?'status-ok':overall==='warn'?'status-warn':overall==='bad'?'status-bad':'';
-  // `shortLabel` (only ever set alongside `strip`) overrides the badge text
-  // without touching `label` itself - `label` stays exactly what it always
-  // was (tests, tooltips, anything else keying off it are untouched), this
-  // only changes what's DISPLAYED once a strip already shows the same
-  // numbers. undefined falls back to the full label (every non-strip
-  // result, unaffected); an empty string suppresses the badge entirely
-  // (the strip alone says everything it used to say).
-  let badges = ex.eval.results.filter(r => (r.shortLabel ?? r.label) !== '').map(r=>`<span class="badge ${r.status}">${statusIcon(r.status)} ${r.shortLabel ?? r.label}</span>`).join('');
+  // `shortLabel` (undefined falls back to the full label; an empty string
+  // suppresses the badge entirely) overrides the badge text without
+  // touching `label` itself. carryoverNote results are routed to their own
+  // .carryover-note callout below instead of the ordinary badge row -
+  // without this exclusion they'd render as both (design review finding 9).
+  let badges = ex.eval.results.filter(r => !r.carryoverNote && (r.shortLabel ?? r.label) !== '').map(r=>`<span class="badge ${r.status}${r.flagBadge?' flag':''}">${statusIcon(r.status)} ${r.shortLabel ?? r.label}</span>`).join('');
   // Tuned-frequency confirmation - VFR-only per the user's explicit ask
   // (2026-08-25): an IFR flight can hop 6-10+ frequencies (Clearance/Ground/
   // Tower/Departure/multiple Centers/Approach/Tower/Ground), so a badge on
@@ -4461,23 +4559,22 @@ function renderStrip(ex){
   const isVfr = PARSED.meta.flightRules && PARSED.meta.flightRules.toUpperCase()==='VFR';
   const freq = (isVfr && ex.atc.state) ? parseFreq(ex.atc.state.com1) : null;
   if(freq) badges += `<span class="badge freq">📻 ${freq}</span>`;
-  // Every result carrying diagram data gets its assigned-vs-actual visual -
-  // HDG renders as a compass, ALT/SPD as a linear bar (see headingCompassSvg/
-  // linearBarSvg). A single exchange can carry more than one diagram-bearing
-  // result (e.g. SPD's flat 250kt-below-10k and approach-speed-target checks
-  // can both fire on the same exchange), so this renders all of them, not
-  // just the first.
-  const diagramsHtml = ex.eval.results.filter(r=>r.diagram).map(r=>{
-    if(r.type==='HDG') return headingCompassSvg(r.diagram);
-    if(r.type==='ALT') return linearBarSvg({...r.diagram, unit:'ft'});
-    if(r.type==='SPD') return linearBarSvg({...r.diagram, unit:'kt'});
-    return '';
-  }).join('');
-  // Same "one per result" fan-out as diagramsHtml above, but rendered
-  // collapsed (see stateStripHtml) - independent of whether that same
-  // result also carries `diagram`.
-  const stripsHtml = ex.eval.results.filter(r=>r.strip).map(r=>stateStripHtml(r.strip, r.status)).join('');
+  // HDG-only now - the ALT/SPD linear bar was retired (linearBarSvg removed)
+  // once the trio started conveying the same assigned-vs-actual relationship
+  // as plain numbers for those two axes; a heading compass stays since it's
+  // a genuinely different (angular) read a text trio can't replace.
+  const diagramsHtml = ex.eval.results.filter(r=>r.diagram && r.type==='HDG').map(r=>headingCompassSvg(r.diagram)).join('');
+  const trioHeadHtml = trioGroupHtml(ex.trios, false);
+  const carryoverHtml = carryoverNoteHtml(ex);
   const t = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : '—';
+  // The KV block drops whichever of its alt/hdg/spd fields already has a
+  // corresponding trio (relevant or carried-forward) for this exchange -
+  // both read off the same ex.atc.state, so showing both would duplicate
+  // the identical numbers in one panel (design review finding 10). Scoped
+  // to this first KV call only - the second ("State at next ATC
+  // transmission") reads a genuinely later state, so it never duplicates
+  // the trio's own instruction-moment numbers.
+  const coveredAxes = new Set([...ex.trios, ...ex.otherTrios].map(trio=>trio.axis));
 
   const div = document.createElement('div');
   div.className = 'strip '+cls;
@@ -4486,7 +4583,8 @@ function renderStrip(ex){
       <div class="strip-time">${t}</div>
       <div class="strip-main">
         <div class="strip-instr"><span class="who">${ex.atc.speaker==='PILOT' ? pilotLabel(ex.atc) : 'ATC'}</span>${escapeHtml(ex.atc.text)}</div>
-        ${stripsHtml}
+        ${trioHeadHtml}
+        ${carryoverHtml}
         ${badges ? `<div class="strip-badges">${badges}</div>` : ''}
         <!-- Moved out of the click-to-expand detail panel (2026-08-22) - the
              pilot's readback, including its own timestamp for at-a-glance
@@ -4507,10 +4605,11 @@ function renderStrip(ex){
     <div class="strip-detail">
       ${ex.atc.rawVoice ? `<div class="rawvoice">🔊 "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
       ${diagramsHtml}
+      ${trioGroupHtml(ex.otherTrios, true)}
       <div class="detail-grid">
         <div class="detail-col">
           <h4>Aircraft state at instruction</h4>
-          ${ex.atc.state ? renderStateKV(ex.atc.state) : '<div class="kv">No state captured</div>'}
+          ${ex.atc.state ? renderStateKV(ex.atc.state, coveredAxes) : '<div class="kv">No state captured</div>'}
         </div>
         <div class="detail-col">
           <!-- Renamed from "State at end of response window" (2026-09-05) -
@@ -4536,16 +4635,21 @@ function renderStrip(ex){
   return div;
 }
 
-function renderStateKV(s){
-  return `
-    <div class="kv"><span>Altitude</span><b>${Math.round(s.alt).toLocaleString()} ft</b></div>
-    <div class="kv"><span>Heading</span><b>${Math.round(s.hdg)}°</b></div>
-    <div class="kv"><span>Speed (IAS)</span><b>${Math.round(s.spd)} kt</b></div>
-    <div class="kv"><span>Ground speed</span><b>${Math.round(s.gs)} kt</b></div>
-    <div class="kv"><span>In vector</span><b>${s.inVector?'Yes':'No'}</b></div>
-    <div class="kv"><span>Fix</span><b>${s.currFix||'—'}</b></div>
-    <div class="kv"><span>Time</span><b>${fmtTime(s.timeMin)}</b></div>
-  `;
+// dropAxes (a Set of 'ALT'/'HDG'/'SPD') omits whichever of the three
+// tracked-axis rows a trio already covers elsewhere on the same card -
+// see renderStrip's "Aircraft state at instruction" call (design review
+// finding 10). Omitted entirely for the "State at next ATC transmission"
+// call, which reads a genuinely later state and never duplicates a trio.
+function renderStateKV(s, dropAxes){
+  const rows = [];
+  if(!dropAxes || !dropAxes.has('ALT')) rows.push(`<div class="kv"><span>Altitude</span><b>${Math.round(s.alt).toLocaleString()} ft</b></div>`);
+  if(!dropAxes || !dropAxes.has('HDG')) rows.push(`<div class="kv"><span>Heading</span><b>${Math.round(s.hdg)}°</b></div>`);
+  if(!dropAxes || !dropAxes.has('SPD')) rows.push(`<div class="kv"><span>Speed (IAS)</span><b>${Math.round(s.spd)} kt</b></div>`);
+  rows.push(`<div class="kv"><span>Ground speed</span><b>${Math.round(s.gs)} kt</b></div>`);
+  rows.push(`<div class="kv"><span>In vector</span><b>${s.inVector?'Yes':'No'}</b></div>`);
+  rows.push(`<div class="kv"><span>Fix</span><b>${s.currFix||'—'}</b></div>`);
+  rows.push(`<div class="kv"><span>Time</span><b>${fmtTime(s.timeMin)}</b></div>`);
+  return rows.join('\n');
 }
 
 function escapeHtml(str){

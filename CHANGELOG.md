@@ -4,6 +4,17 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.13.0] - 2026-09-09
+
+### Added
+- Every instruction card — not just clearances — now shows a live Altitude/Heading/Speed → Assigned → Gap-remaining readout for each currently open, assigned target, replacing the old per-check "strip" cells with one consistent element used everywhere, including cards with no clearance of their own (a player-initiated request, a plain acknowledgment). A card whose own instruction addresses more than one axis at once shows both readouts together; any other still-open axis is one click away in the expandable detail view, shown in a neutral (non-green) style since that card didn't check it.
+- A compound clearance leading with a crossing restriction (e.g. "cross MEIJI at or above 6,000, then descend to 3,500") now shows that leading restriction as a separate "Also: cross X at Y" flag — the v1.12.0 crossing-restriction check's own verdict contributed to the overall status but was previously invisible as text anywhere on the card.
+- A header note now states plainly that every number in the tool comes from a logged radio-activity sample, not continuous real-time tracking, so gaps of a minute or more between values are expected.
+
+### Changed
+- The interrupted-clearance callout — a previous instruction still correctly in progress when a later one cuts it off — now reads "Previous target not yet reached: X (was Y short/off when reassigned)" directly on the interrupting card, replacing the older "ATC assigned new HDG/ALT/SPD before reaching X (issued Y)" wording.
+- The per-check "strip" cells (added v1.8.0/v1.8.1) are retired, superseded by the trio above.
+
 ## [1.12.0] - 2026-09-08
 
 ### Added
