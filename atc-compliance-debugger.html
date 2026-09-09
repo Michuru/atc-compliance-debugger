@@ -949,6 +949,23 @@ function parseAltitudeClearance(text){
   // WORD" between climb/descend and the target) rather than the wide
   // {0,60} skip-ahead the "maintain" patterns use above, so this can't
   // reach past a comma into an unrelated later clause.
+  // Compound "cross FIX at/above/below ALT1, then climb/descend to ALT2" -
+  // must be tried before BOTH the plain climb/descend patterns just below
+  // (FL-notation and plain-digit alike), since either would otherwise match
+  // the trailing "then climb/descend ... ALT2" clause as a substring and
+  // silently drop the leading crossing restriction entirely (confirmed live
+  // in 2 real logs: MEIJI/JAL3114 uses plain digits, ASLIB/EZY94NU uses FL
+  // notation - both existing patterns must be preceded by this one, not
+  // just one of them). Real player-graded compound occurrences never
+  // include the word "maintain" (confirmed via full corpus grep), so this
+  // doesn't need to precede the earlier "maintain"-keyed patterns above.
+  m = text.match(/cross\s+([\w-]+)\s+at\s+(?:or\s+(above|below)\s+)?(?:FL\s*(\d{3})|([\d,]+)\s*(?:feet)?),?\s*then\s+(climb|descend)\b(?:\s+via\s+[\w-]+)?\s+(?:to\s+)?(?:FL\s*(\d{3})|([\d,]+)\s*(?:feet)?)/i);
+  if(m){
+    const crossFt = m[3] ? parseInt(m[3])*100 : parseInt(m[4].replace(/,/g,''));
+    const finalFt = m[6] ? parseInt(m[6])*100 : parseInt(m[7].replace(/,/g,''));
+    return { action:m[5].toLowerCase(), targetFt: finalFt, raw:m[0], atDiscretion,
+      crossingRestriction:{ fixName: m[1].toUpperCase(), ft: crossFt, direction: m[2] ? m[2].toLowerCase() : null } };
+  }
   m = text.match(/(climb|descend)\b(?:\s+via\s+[\w-]+)?\s+(?:to\s+)?FL\s*(\d{3})\b/i);
   if(m) return { action:m[1].toLowerCase(), targetFt: parseInt(m[2])*100, raw:m[0], atDiscretion };
   m = text.match(/(climb|descend)\b(?:\s+via\s+[\w-]+)?\s+(?:to\s+)?([\d,]{3,})\s*(?:feet)?\b/i);
@@ -962,8 +979,12 @@ function parseAltitudeClearance(text){
   // Accepts flight-level notation ("cross SUGOL at or above FL100") as
   // well as the plain-digit form, tried first since "FL100" would
   // otherwise dead-end the digit-only branch on the letter "F".
-  m = text.match(/cross\s+[\w-]+\s+at\s+(?:or\s+(?:above|below)\s+)?(?:FL\s*(\d{3})|([\d,]+)\s*(?:feet)?)/i);
-  if(m) return { action:'maintain', targetFt: m[1] ? parseInt(m[1])*100 : parseInt(m[2].replace(/,/g,'')), raw:m[0], pointRestriction:true };
+  m = text.match(/cross\s+([\w-]+)\s+at\s+(?:or\s+(above|below)\s+)?(?:FL\s*(\d{3})|([\d,]+)\s*(?:feet)?)/i);
+  if(m){
+    const ft = m[3] ? parseInt(m[3])*100 : parseInt(m[4].replace(/,/g,''));
+    return { action:'maintain', targetFt: ft, raw:m[0], pointRestriction:true,
+      crossingRestriction:{ fixName: m[1].toUpperCase(), ft, direction: m[2] ? m[2].toLowerCase() : null } };
+  }
   // "Maintain VFR at or below/above (altitude)" is a Class B/C transition
   // altitude ceiling/floor, not a target to converge on - BeyondATC's
   // paraphrase of FAA JO 7110.65BB Para 7-9-2 (VFR AIRCRAFT IN CLASS B
@@ -1665,6 +1686,65 @@ function firstStateAfterLeavingFix(states, fixName){
   return states.find(s => s.lastFix && s.lastFix.toUpperCase() === target) || null;
 }
 
+// Last state still approaching the named fix (currFix hasn't flipped to
+// lastFix yet) - the "before crossing" counterpart to
+// firstStateAfterLeavingFix above, used by the crossing-restriction check
+// (see evaluateCrossingRestriction) to bracket the actual moment of
+// crossing from both sides rather than trusting a single anchor sample.
+function lastStateApproachingFix(states, fixName){
+  if(!fixName) return null;
+  const target = fixName.toUpperCase();
+  let last = null;
+  for(const s of states){ if(s.currFix && s.currFix.toUpperCase() === target) last = s; }
+  return last;
+}
+
+// Grades a "cross FIX at/above/below ALT" restriction against real
+// telemetry bracketing the crossing - a real bug class this exists to
+// close (see Design Docs/atc-debugger-crossing-restriction-check.md):
+// previously this always emitted a hardcoded "not independently verified"
+// regardless of what the flown altitude actually was at the fix.
+//
+// Requires BOTH the pre- and post-crossing bracket samples, not just
+// whichever one exists. A lone `pre` means the fix was never actually
+// sequenced past in this window (the clearance was superseded, or the log
+// ends, before crossing) - grading off a stale approaching-sample risks a
+// false bust/false-comply. A lone `post` means the fix was already behind
+// the aircraft before this window/clearance began - grading off it risks
+// attributing the crossing to before the restriction even existed. Either
+// case means the crossing itself wasn't observed happening, not just
+// imprecisely timed - an honest null (falls back to the pre-existing
+// "not independently verified" text) instead of a guess, matching this
+// file's established under-detection bias. (Design review, Fable 5.1,
+// 2026-09-08.)
+//
+// Grading whichever bracket sample reads closer to compliant (rather than
+// always the post-crossing sample, mirroring firstStateAfterLeavingFix's
+// own HDG usage) is deliberate: real telemetry from a genuine compliant
+// crossing (ASLIB/EZY94NU, bare FL260/26,000ft restriction) brackets
+// 26,316ft (last pre-crossing sample) and 25,969ft (first post-crossing
+// sample) - a ~350ft swing between consecutive samples, larger than the
+// tolerance band itself. Trusting only the post-crossing sample would
+// misjudge this real, clean crossing as marginally over.
+function evaluateCrossingRestriction(cr, altWin, cfg){
+  if(!cr || !cr.fixName) return null;
+  const pre = lastStateApproachingFix(altWin, cr.fixName);
+  const post = firstStateAfterLeavingFix(altWin, cr.fixName);
+  if(!pre || !post) return null;
+  const candidates = [pre, post];
+  const shortfall = s => cr.direction==='above' ? Math.max(0, cr.ft - s.alt)
+                        : cr.direction==='below' ? Math.max(0, s.alt - cr.ft)
+                        : Math.abs(s.alt - cr.ft);
+  const best = candidates.reduce((a,b) => shortfall(a) <= shortfall(b) ? a : b);
+  const diff = Math.round(shortfall(best));
+  const status = diff <= cfg.altTol ? 'ok' : (diff <= cfg.altTol*2 ? 'warn' : 'bad');
+  const actualAlt = Math.round(best.alt).toLocaleString();
+  const label = status==='ok'
+    ? `ALT ${cr.ft.toLocaleString()} — crossed ${cr.fixName} at ${actualAlt}ft, complied`
+    : `ALT ${cr.ft.toLocaleString()} — crossed ${cr.fixName} at ${actualAlt}ft (${diff.toLocaleString()}ft ${cr.direction==='above'?'under':cr.direction==='below'?'over':'off'})`;
+  return {type:'ALT', status, label, shortLabel:''};
+}
+
 // Field elevation, read straight from the log's own parked PlayerState
 // samples instead of an external airport database - the "on approach"
 // altitude threshold is meant to be AGL (see approachAltThreshold's unit),
@@ -2051,7 +2131,20 @@ function evaluateExchange(ex, cfg){
         // green check reads as "reached 120°" unless the real number is
         // right there too. Flagged directly by the user after reading this
         // exact label against a real log.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, shortLabel:'', carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'Aircraft now', value:`${Math.round(finalState.hdg)}°`}, cell3:{label:'Gap remaining', value:`${Math.round(finalDiff)}°, moving toward it`}}});
+        // strip cell2 label 'Aircraft now'->'At handoff' plus a timestamp in
+        // the value (2026-09-08): 'Aircraft now' reads as "as of this
+        // instruction/right now," but finalState is actually the aircraft's
+        // position when a LATER instruction superseded this one - which can
+        // be many minutes/thousands of feet after this card's own
+        // instruction was issued. Confirmed real (Japanair 3114): a
+        // "descend to 7,000" card issued at 35,998ft showed "Aircraft now:
+        // 13,764ft" with nothing in the compact strip signaling that number
+        // was actually 16 real minutes later, at the moment a further
+        // descent clearance took over - read as a missing middle
+        // instruction when there wasn't one. The full prose label already
+        // says "new instructions given before arriving," but the strip
+        // (the part actually glanced at) carried no such context.
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, shortLabel:'', carryover:{targetHdg:target}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${target}°`}, cell2:{label:'At handoff', value:`${Math.round(finalState.hdg)}° (${fmtTime(finalState.timeMin)})`}, cell3:{label:'Gap remaining', value:`${Math.round(finalDiff)}°, moving toward it`}}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -2181,7 +2274,22 @@ function evaluateExchange(ex, cfg){
 
   // ---- ALTITUDE ----
   if(ex.clearance.altitude){
-    const { action, targetFt, atDiscretion, pointRestriction, viaProcedure, untilEstablished, vfrCeiling, direction } = ex.clearance.altitude;
+    const { action, targetFt, atDiscretion, pointRestriction, viaProcedure, untilEstablished, vfrCeiling, direction, crossingRestriction } = ex.clearance.altitude;
+    // Compound "cross FIX at/above/below ALT1, then climb/descend to ALT2"
+    // (see parseAltitudeClearance) carries a real separate final target
+    // already graded by the bust/compliedAt/carryover chain below - this is
+    // an ADDITIONAL push for the leading crossing restriction, independent
+    // of which branch ends up handling ALT2. Guarded on `!pointRestriction`
+    // so the standalone "cross FIX at ALT" case (no separate final target)
+    // isn't double-pushed here as well as in its own dedicated branch below.
+    if(crossingRestriction && !pointRestriction){
+      const crResult = evaluateCrossingRestriction(crossingRestriction, altWin, cfg);
+      // Same "honest fallback, not silence" treatment as the standalone
+      // pointRestriction branch below (and viaProcedure above) - a missing
+      // bracket sample means the crossing itself wasn't observed, not that
+      // nothing should be said about it at all.
+      results.push(crResult || {type:'ALT', status:'ok', label:`ALT ${crossingRestriction.ft.toLocaleString()} — crossing restriction at ${crossingRestriction.fixName} (not independently verified from available states)`});
+    }
     if(vfrCeiling){
       // See parseAltitudeClearance - any altitude on the correct side of
       // targetFt is fully compliant for the whole time this clearance is
@@ -2443,7 +2551,8 @@ function evaluateExchange(ex, cfg){
         // "stayed high/low" or busted would be exactly the wrong guess
         // the bust-check above already deliberately avoids; this extends
         // the same reasoning to this fallback instead of contradicting it.
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — crossing restriction (not independently verified from available states)`});
+        const crResult = evaluateCrossingRestriction(crossingRestriction, altWin, cfg);
+        results.push(crResult || {type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — crossing restriction (not independently verified from available states)`});
       } else if(ex.altSuperseded && progressing){
         // Not a violation: ATC simply issued a new altitude before this one
         // was reached, and the aircraft was correctly headed that way. The
@@ -2488,7 +2597,10 @@ function evaluateExchange(ex, cfg){
         // while the label carried no number at all.
         const progress = altLiftoffPending ? `parked when issued, still at ${actualAltStr}ft` : progressVerb;
         const altGap = Math.round(Math.abs(targetFt - finalState.alt));
-        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} assigned — ${progress}, new instructions given before arriving`, shortLabel:'', carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'Aircraft now', value:`${actualAltStr}ft`}, cell3:{label:'Gap remaining', value:`${altGap.toLocaleString()}ft, moving toward it`}}});
+        // strip cell2 'Aircraft now'->'At handoff' + timestamp - see the
+        // matching HDG carryover branch's comment above for the real-log
+        // motivation (Japanair 3114, 2026-09-08).
+        results.push({type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} assigned — ${progress}, new instructions given before arriving`, shortLabel:'', carryover:{targetFt}, diagram:{target:targetFt, actual:Math.round(finalState.alt), status:'ok', tol:cfg.altTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetFt.toLocaleString()}ft`}, cell2:{label:'At handoff', value:`${actualAltStr}ft (${fmtTime(finalState.timeMin)})`}, cell3:{label:'Gap remaining', value:`${altGap.toLocaleString()}ft, moving toward it`}}});
       } else {
         let label;
         if(action==='descend' && diff > cfg.altTol){
@@ -2933,7 +3045,10 @@ function evaluateExchange(ex, cfg){
         const actualSpdVal = Math.round(finalSpd.spd);
         const progressVerb = finalSpd.spd > startState.spd ? `still speeding up, now at ${actualSpdVal}kt` : `still slowing, now at ${actualSpdVal}kt`;
         const spdGap = Math.round(Math.abs(targetKt - finalSpd.spd));
-        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} assigned — ${progressVerb}, new instructions given before arriving`, shortLabel:'', carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'Aircraft now', value:`${actualSpdVal}kt`}, cell3:{label:'Gap remaining', value:`${spdGap}kt, moving toward it`}}});
+        // strip cell2 'Aircraft now'->'At handoff' + timestamp - see the
+        // matching HDG carryover branch's comment above for the real-log
+        // motivation (Japanair 3114, 2026-09-08).
+        results.push({type:'SPD', status:'ok', label:`SPD ${targetLabel} assigned — ${progressVerb}, new instructions given before arriving`, shortLabel:'', carryover:{targetKt, implied}, diagram:{target:targetKt, actual:Math.round(finalSpd.spd), status:'ok', tol:cfg.spdTol, actualLabel:'current'}, strip:{cell1:{label:'Assigned', value:`${targetKt}kt`}, cell2:{label:'At handoff', value:`${actualSpdVal}kt (${fmtTime(finalSpd.timeMin)})`}, cell3:{label:'Gap remaining', value:`${spdGap}kt, moving toward it`}}});
       } else {
         const diff = Math.round(finalSpd.spd - targetKt);
         const label = `SPD ${targetLabel} — ended ${Math.round(finalSpd.spd)}kt (${diff>0?'+':''}${diff}kt)`;

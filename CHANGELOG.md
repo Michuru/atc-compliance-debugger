@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.12.0] - 2026-09-08
+
+### Added
+- "Cross FIX at/above/below ALTITUDE" crossing restrictions — both standalone and the compound "cross FIX at ALT1, then climb/descend to ALT2" form — are now graded against the aircraft's real telemetry bracketing the crossing, instead of always showing a hardcoded "not independently verified." The compound form was previously silently dropped entirely (the general climb/descend parser matched the trailing clause as a substring and never recognized the leading crossing restriction at all). Falls back to the same "not independently verified" wording when the telemetry doesn't actually bracket the crossing (clearance superseded before reaching the fix, or the fix already behind the aircraft), rather than risking a false verdict off an incomplete picture. See `SPEC.md`'s "Crossing-restriction verification" entry for the full behavior.
+
 ## [1.11.0] - 2026-09-08
 
 ### Added
