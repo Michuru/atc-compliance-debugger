@@ -206,6 +206,17 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,182,72,0.06);}
 .badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,92,108,0.08);}
 .badge.flag{border-style:dashed;}
+/* VFR dynamic state readout - a continuous readout, not a pass/fail/info
+   flag, so styled as plain text rather than a .badge pill. See
+   Design Docs/vfr-dynamic-flight-state-display.md. */
+.state-readout{margin-top:7px;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--green);font-variant-numeric:tabular-nums;}
+.state-readout span{color:var(--text-dimmer);margin-right:2px;}
+/* VFR location display - distance/bearing text + abstract offline
+   dot-sketch. See Design Docs/vfr-location-display.md. */
+.locline{margin-top:7px;padding:7px 9px;background:var(--panel-2);border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--text);}
+.mini-sketch{margin-top:7px;height:80px;border:1px dashed var(--line);border-radius:4px;position:relative;background:var(--panel-2);}
+.mini-sketch svg{position:absolute;inset:0;width:100%;height:100%;}
+.mini-sketch-label{position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--text-dimmer);}
 .trio-group{display:block;}
 .trio-axis-label{font-size:9px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.5px;margin-top:8px;}
 .carryover-note{font-size:11.5px;color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin-top:8px;}
@@ -1678,6 +1689,65 @@ function hasStoppedFlying(state){
   return !!state && state.spd < 50;
 }
 
+// Factored out of evaluateExchange (was inline there only) so the VFR
+// dynamic state readout below can share the identical "on approach"
+// definition the SPD/V-S compliance checks already use, rather than
+// maintaining a second copy that could silently drift out of sync. See
+// Design Docs/vfr-dynamic-flight-state-display.md.
+function computeApproachAltAbs(cfg){
+  return cfg.arrivalFieldElevation != null ? cfg.arrivalFieldElevation + cfg.approachAltThreshold : cfg.approachAltThreshold;
+}
+
+// Coarse VFR-display-only classification of what to show, never rendered
+// as a label itself - "ground" shows no state readout, "airborne" shows
+// HDG+ALT, the third bucket (name kept as "approach" for readability, but
+// purely internal) adds SPD. Deliberately NOT gated on inVector/
+// pastTopOfClimb the way evaluateExchange's own SPD compliance check is
+// (~line 2891) - real VFR fixtures almost never set inVector at all (it
+// only fires on an actual ATC-assigned heading, not flight-following
+// advisories), so that gate would leave this display's SPD field dead for
+// nearly every VFR flight. Pure altitude-vs-arrival-field-elevation
+// instead (via the same computeApproachAltAbs above, so KSZT-style
+// high-elevation fields still work correctly - MSL alone would be
+// meaningless there). Known, accepted tradeoff: this can also read
+// "true" briefly during climb-out right after departure if the departure
+// and arrival fields are at similar elevations (or the same field, e.g.
+// pattern work) - deliberately left unresolved per direct user decision,
+// since this is a cosmetic field-selection gate, not a compliance verdict.
+function flightPhase(state, cfg){
+  if(!state) return null;
+  if(isOnGround(state)) return 'ground';
+  if(state.alt < cfg.approachAltAbs) return 'approach';
+  return 'airborne';
+}
+
+// Great-circle distance in nautical miles (haversine) - used by the VFR
+// location display's distance-from-departure readout and destination-
+// suppression check. See Design Docs/vfr-location-display.md.
+const EARTH_RADIUS_NM = 3440.065;
+function distanceNm(lat1, lon1, lat2, lon2){
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+  return 2 * EARTH_RADIUS_NM * Math.asin(Math.sqrt(a));
+}
+
+// Initial bearing (degrees, 0-360) from point 1 to point 2.
+function bearingDeg(lat1, lon1, lat2, lon2){
+  const toRad = d => d * Math.PI / 180;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+// 8-point compass bucket, each a 45-degree sector centered on the
+// cardinal/intercardinal (e.g. SE = 112.5-157.5). The modulo handles the
+// N wraparound (337.5-360 and 0-22.5 both round to index 0/8 -> 'N').
+const COMPASS_POINTS = ['N','NE','E','SE','S','SW','W','NW'];
+function compassPoint(bearing){
+  return COMPASS_POINTS[Math.round(bearing / 45) % 8];
+}
+
 // First later state where the aircraft has actually left the ground
 // (climbed meaningfully above the altitude it was sitting at).
 function firstAirborneState(states, groundState){
@@ -1764,11 +1834,29 @@ function evaluateCrossingRestriction(cr, altWin, cfg){
 // (~2977ft), where "below 3000ft" is true almost the moment the gear comes
 // up. Only trustworthy when the log actually starts/ends on the ground -
 // null (falling back to the flat MSL threshold) otherwise.
+// Same-point suppression distance for the location display's destination
+// dot (see below) - pattern work / touch-and-goes land back at the
+// departure point itself, and 0.5nm is close enough that a second dot
+// there would add nothing over just showing departure + current position.
+const SAME_POINT_SUPPRESSION_NM = 0.5;
+
 function deriveFieldElevations(states){
   const first = states[0], last = states[states.length-1];
+  const departureOnGround = isOnGround(first), arrivalOnGround = isOnGround(last);
+  // departureLatLon/arrivalLatLon feed the VFR location display's
+  // distance/bearing readout and mini-sketch (Design Docs/
+  // vfr-location-display.md) - added alongside the existing departure/
+  // arrival elevation numbers, not nested into them, since those two are
+  // already consumed elsewhere as plain numbers (the approach-altitude
+  // threshold, the Thresholds panel label, the noDeparture/noArrival
+  // checks) and reshaping them would break every one of those call sites.
+  const arrivalSamePointAsDeparture = departureOnGround && arrivalOnGround &&
+    distanceNm(first.lat, first.lon, last.lat, last.lon) < SAME_POINT_SUPPRESSION_NM;
   return {
-    departure: isOnGround(first) ? first.alt : null,
-    arrival: isOnGround(last) ? last.alt : null
+    departure: departureOnGround ? first.alt : null,
+    arrival: arrivalOnGround ? last.alt : null,
+    departureLatLon: departureOnGround ? {lat: first.lat, lon: first.lon} : null,
+    arrivalLatLon: (arrivalOnGround && !arrivalSamePointAsDeparture) ? {lat: last.lat, lon: last.lon} : null
   };
 }
 
@@ -2767,7 +2855,7 @@ function evaluateExchange(ex, cfg){
   // positives on two separate real logs before this was verified against
   // the source. Shared by both the V/S and SPD checks below - hoisted here
   // since V/S needs it too now (see the final-approach sink-rate check).
-  const approachAltAbs = cfg.arrivalFieldElevation != null ? cfg.arrivalFieldElevation + cfg.approachAltThreshold : cfg.approachAltThreshold;
+  const approachAltAbs = computeApproachAltAbs(cfg);
 
   // ---- VERTICAL SPEED (while this altitude clearance is in effect) ----
   // Two genuinely different contexts, judged separately rather than by one
@@ -3655,7 +3743,15 @@ function recompute(){
   const cfgv = getCfgValues();
   cfgv.arrivalFieldElevation = PARSED.meta.fieldElevations ? PARSED.meta.fieldElevations.arrival : null;
   cfgv.topOfClimbLineIndex = PARSED.meta.topOfClimbLineIndex;
-  EXCHANGES.forEach(ex=>{ ex.eval = ex.isPilotReport ? evaluatePilotReport(ex, cfgv) : evaluateExchange(ex, cfgv); });
+  cfgv.approachAltAbs = computeApproachAltAbs(cfgv);
+  EXCHANGES.forEach(ex=>{
+    ex.eval = ex.isPilotReport ? evaluatePilotReport(ex, cfgv) : evaluateExchange(ex, cfgv);
+    // VFR dynamic state readout (renderStrip) - cached here rather than
+    // recomputed at render time so it shares this same cfgv snapshot
+    // (topOfClimbLineIndex/approachAltAbs) instead of drifting from
+    // whatever tolerance-slider state happens to be live when rendered.
+    ex.flightPhase = flightPhase(ex.atc.state, cfgv);
+  });
 
   // ---- Per-axis "current open, trackable target" tracker + trio pass ----
   // See Design Docs/atc-debugger-timeline-cards.md. Walks EXCHANGES in
@@ -4563,6 +4659,57 @@ function headingCompassSvg({target, actual, status, actualLabel='actual'}){
   </div>`;
 }
 
+// Abstract offline dot-sketch for the VFR location display - departure/
+// destination/current position on a locally-normalized nm-space
+// projection, deliberately NOT a real map (no terrain/streets/tiles - see
+// Design Docs/vfr-location-display.md for the offline-vs-map-tiles
+// decision). Converts lat/lon deltas to nautical miles first (with a
+// cos(lat) correction) and applies ONE shared scale factor to both axes,
+// so the sketch's visual bearing always agrees with the printed bearing
+// text beside it - independently normalizing lat/lon per axis would
+// visually distort a north-south leg. Each axis's span is floored at
+// SKETCH_MIN_SPAN_NM before computing the scale, so an early-flight card
+// where departure and current position are nearly identical doesn't
+// divide by a near-zero span (which would otherwise collapse every dot
+// onto the same point or produce NaN coordinates).
+const SKETCH_W = 400, SKETCH_H = 110, SKETCH_PAD = 18, SKETCH_MIN_SPAN_NM = 1;
+function miniSketchSvg(departure, destination, current){
+  const refLatRad = departure.lat * Math.PI / 180;
+  const toNm = p => ({
+    x: (p.lon - departure.lon) * 60 * Math.cos(refLatRad),
+    y: (p.lat - departure.lat) * 60
+  });
+  const nmPts = {departure: toNm(departure), current: toNm(current)};
+  if(destination) nmPts.destination = toNm(destination);
+
+  const xs = Object.values(nmPts).map(p=>p.x), ys = Object.values(nmPts).map(p=>p.y);
+  const spanX = Math.max(Math.max(...xs) - Math.min(...xs), SKETCH_MIN_SPAN_NM);
+  const spanY = Math.max(Math.max(...ys) - Math.min(...ys), SKETCH_MIN_SPAN_NM);
+  const scale = Math.min((SKETCH_W - 2*SKETCH_PAD) / spanX, (SKETCH_H - 2*SKETCH_PAD) / spanY);
+  const centerX = (Math.max(...xs) + Math.min(...xs)) / 2;
+  const centerY = (Math.max(...ys) + Math.min(...ys)) / 2;
+  // SVG y grows downward; north (positive latNm) should draw upward.
+  const toSvg = p => ({
+    x: SKETCH_W/2 + (p.x - centerX) * scale,
+    y: SKETCH_H/2 - (p.y - centerY) * scale
+  });
+  const dep = toSvg(nmPts.departure), cur = toSvg(nmPts.current);
+  const dest = nmPts.destination ? toSvg(nmPts.destination) : null;
+
+  const lineHtml = dest ? `<line x1="${dep.x.toFixed(1)}" y1="${dep.y.toFixed(1)}" x2="${dest.x.toFixed(1)}" y2="${dest.y.toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="4 3"/>` : '';
+  const destDotHtml = dest ? `<circle cx="${dest.x.toFixed(1)}" cy="${dest.y.toFixed(1)}" r="4" fill="var(--text-dimmer)"/>` : '';
+
+  return `<div class="mini-sketch">
+    <svg viewBox="0 0 ${SKETCH_W} ${SKETCH_H}" preserveAspectRatio="none">
+      ${lineHtml}
+      <circle cx="${dep.x.toFixed(1)}" cy="${dep.y.toFixed(1)}" r="4" fill="var(--text-dimmer)"/>
+      ${destDotHtml}
+      <circle cx="${cur.x.toFixed(1)}" cy="${cur.y.toFixed(1)}" r="5" fill="var(--green)"/>
+    </svg>
+    <div class="mini-sketch-label">abstract sketch, no real terrain/streets</div>
+  </div>`;
+}
+
 // At-a-glance assigned/current/gap readout, reused for both the always-
 // visible collapsed head (ex.trios, the relevant axes) and the click-to-
 // expand toggle section (ex.otherTrios, carried-forward/informational) -
@@ -4611,6 +4758,32 @@ function renderStrip(ex){
   const isVfr = PARSED.meta.flightRules && PARSED.meta.flightRules.toUpperCase()==='VFR';
   const freq = (isVfr && ex.atc.state) ? parseFreq(ex.atc.state.com1) : null;
   if(freq) badges += `<span class="badge freq">📻 ${freq}</span>`;
+  // VFR dynamic state readout - nothing on the ground, HDG+ALT airborne,
+  // HDG+ALT+SPD once ex.flightPhase (cached in recompute, see flightPhase)
+  // says the aircraft is on approach. See
+  // Design Docs/vfr-dynamic-flight-state-display.md.
+  const stateReadoutHtml = (isVfr && ex.atc.state && ex.flightPhase && ex.flightPhase!=='ground') ? (()=>{
+    const s = ex.atc.state;
+    const parts = [`<span>HDG</span>${Math.round(s.hdg)}°`, `<span>ALT</span>${Math.round(s.alt).toLocaleString()}ft`];
+    if(ex.flightPhase==='approach') parts.push(`<span>SPD</span>${Math.round(s.spd)}kt`);
+    return `<div class="state-readout">${parts.join('')}</div>`;
+  })() : '';
+  // VFR location display - distance/bearing readout + abstract offline
+  // dot-sketch, both gated the same way as the state readout above
+  // (nothing on the ground - distance from the point you're sitting at
+  // isn't useful) plus needing a real departure reference point captured
+  // at all. See Design Docs/vfr-location-display.md.
+  const fieldElevations = PARSED.meta.fieldElevations;
+  const departureLatLon = fieldElevations ? fieldElevations.departureLatLon : null;
+  const locationHtml = (isVfr && ex.atc.state && ex.flightPhase && ex.flightPhase!=='ground' && departureLatLon) ? (()=>{
+    const s = ex.atc.state;
+    const dist = distanceNm(departureLatLon.lat, departureLatLon.lon, s.lat, s.lon);
+    const brg = bearingDeg(departureLatLon.lat, departureLatLon.lon, s.lat, s.lon);
+    const origLabel = PARSED.meta.orig ? ` (${PARSED.meta.orig})` : '';
+    const locline = `<div class="locline">📍 ${dist.toFixed(1)}nm ${compassPoint(brg)} of departure${origLabel} · bearing ${Math.round(brg)}°</div>`;
+    const sketch = miniSketchSvg(departureLatLon, fieldElevations.arrivalLatLon, {lat:s.lat, lon:s.lon});
+    return locline + sketch;
+  })() : '';
   // HDG-only now - the ALT/SPD linear bar was retired (linearBarSvg removed)
   // once the trio started conveying the same assigned-vs-actual relationship
   // as plain numbers for those two axes; a heading compass stays since it's
@@ -4638,6 +4811,8 @@ function renderStrip(ex){
         ${trioHeadHtml}
         ${carryoverHtml}
         ${badges ? `<div class="strip-badges">${badges}</div>` : ''}
+        ${stateReadoutHtml}
+        ${locationHtml}
         <!-- Moved out of the click-to-expand detail panel (2026-08-22) - the
              pilot's readback, including its own timestamp for at-a-glance
              delay comparison against the ATC time above, was the single

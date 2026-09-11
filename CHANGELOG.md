@@ -4,6 +4,12 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.14.0] - 2026-09-11
+
+### Added
+- **VFR dynamic flight-state readout**: on a VFR flight specifically, every card now shows a compact heading/altitude readout once the aircraft has left the ground (e.g. "HDG 270° · 3,800ft"), adding speed once the aircraft is low enough to be near either end of the flight (e.g. "HDG 140° · 800ft · 87kt"). VFR flights typically generate fewer graded clearances than IFR ones, leaving many cards with little else to show — this fills in a quick sense of the aircraft's actual state at a glance.
+- **VFR location display**: also VFR-only, a distance/bearing line (e.g. "11.4nm SE of departure (KHVN) · bearing 152°") plus a small offline dot-sketch (departure, destination if known, current position) show roughly where the aircraft was relative to where it departed. Not a real map — no terrain, streets, or live tiles — just plain geometry computed from the log's own recorded positions, kept intentionally offline so the tool never makes an outbound network call.
+
 ## [1.13.1] - 2026-09-09
 
 ### Fixed
