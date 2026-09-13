@@ -4,6 +4,17 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.14.1] - 2026-09-13
+
+### Fixed
+- Filter pills (All/Flagged only/Heading/Altitude/Speed/etc.) now show a count next to each label, so you can see how many instructions match a filter before clicking it.
+- On a VFR flight, the small departure-relative dot-sketch no longer repeats on every single collapsed card — it now only renders inside a card's expanded detail view, alongside the same distance/bearing text that still shows collapsed. On a long VFR flight with many routine check-ins, this cuts a lot of repeated visual noise from the list.
+- Added a small legend near the filter bar explaining what the colored dots, the dashed "flagged" badge outline, and the state-strip's three numbers actually mean.
+- Some secondary text (config panel labels, the aircraft-category reference table, the raw voice transcript, the empty-state message) was too low-contrast against the dark background — brightened for readability.
+- Native browser controls (number-input spinners, scrollbars) now render in dark mode instead of defaulting to a jarring light theme against this tool's own dark palette.
+- The "couldn't parse this file" error now suggests checking that the file is an unedited BeyondATC `Player.log`, instead of just showing the raw error.
+- Minor: search box placeholder now shows a real example instead of repeating its own label; a stray double-space cleanup.
+
 ## [1.14.0] - 2026-09-11
 
 ### Added

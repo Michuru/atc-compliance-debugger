@@ -8,6 +8,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root{
+  color-scheme: dark;
   --bg:#080c0d;
   --panel:#0e1517;
   --panel-2:#121b1e;
@@ -66,6 +67,7 @@ h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
   animation:sweep 3s linear infinite;
 }
 @keyframes sweep{ to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce){ #dropzone .scope::after{ animation:none; } }
 #dropzone h1{font-size:28px;letter-spacing:0.5px;margin:0 0 8px;}
 #dropzone p{color:var(--text-dim);max-width:480px;line-height:1.6;margin:0 0 28px;font-size:14px;}
 .dropbox{
@@ -105,7 +107,7 @@ header.topbar{
 .statgrid{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap;}
 .stat{text-align:right;}
 .stat .n{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;line-height:1;}
-.stat .l{font-size:10px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.8px;margin-top:2px;}
+.stat .l{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;margin-top:2px;}
 .stat.ok .n{color:var(--green);}
 .stat.warn .n{color:var(--amber);}
 .stat.bad .n{color:var(--red);}
@@ -129,23 +131,23 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 #configPanel.open{display:block;}
 #configPanel h3{margin:0 0 14px;font-size:13px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;}
 .cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;}
-.cfg-item label{display:block;font-size:11px;color:var(--text-dimmer);margin-bottom:4px;}
+.cfg-item label{display:block;font-size:11px;color:var(--text-dim);margin-bottom:4px;}
 .cfg-item .row{display:flex;align-items:center;gap:8px;}
 .cfg-item input[type=number]{
   width:80px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
   border-radius:5px;padding:6px 8px;font-family:inherit;font-size:13px;
 }
 .cfg-item span.unit{color:var(--text-dimmer);font-size:11px;}
-.cat-note{color:var(--text-dimmer);font-size:11.5px;margin-bottom:10px;}
+.cat-note{color:var(--text-dim);font-size:11.5px;margin-bottom:10px;}
 .cat-note-inline{font-size:11.5px;color:var(--amber);margin-top:6px;}
-.cat-note-inline .link{text-decoration:underline;cursor:pointer;margin-left:6px;color:var(--amber);}
+.cat-note-inline .link{text-decoration:underline;cursor:pointer;margin-left:6px;color:var(--amber);background:none;border:none;font:inherit;padding:0;}
 .cat-note-inline .link:hover{color:var(--text);}
-.header-disclaimer{font-size:11px;color:var(--text-dimmer);margin-top:6px;max-width:520px;}
+.header-disclaimer{font-size:11px;color:var(--text-dim);margin-top:6px;max-width:520px;}
 .cat-table-wrap{overflow-x:auto;}
 .cat-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;}
 .cat-table th{text-align:left;color:var(--text-dimmer);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;padding:6px 12px 6px 0;border-bottom:1px solid var(--line);}
 .cat-table td{padding:7px 12px 7px 0;border-bottom:1px dotted var(--line);color:var(--text-dim);}
-.cat-table td.examples{color:var(--text-dimmer);font-size:11px;white-space:normal;min-width:220px;}
+.cat-table td.examples{color:var(--text-dim);font-size:11px;white-space:normal;min-width:220px;}
 .cat-table tr.current{background:rgba(61,220,145,0.06);}
 .cat-table tr.current td{color:var(--text);}
 
@@ -193,10 +195,10 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .strip-head{
   display:flex;align-items:center;gap:14px;padding:12px 16px;cursor:pointer;
 }
-.strip-time{color:var(--text-dimmer);font-size:11px;width:50px;flex-shrink:0;}
+.strip-time{color:var(--text-dim);font-size:11px;width:50px;flex-shrink:0;}
 .strip-main{flex:1;min-width:0;}
 .strip-instr{font-size:13.5px;color:var(--text);line-height:1.4;}
-.strip-instr .who{color:var(--text-dimmer);font-size:10px;text-transform:uppercase;letter-spacing:0.6px;margin-right:8px;}
+.strip-instr .who{color:var(--text-dim);font-size:10px;text-transform:uppercase;letter-spacing:0.6px;margin-right:8px;}
 .strip-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;}
 .badge{
   font-size:10.5px;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;
@@ -205,6 +207,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .badge.ok{border-color:var(--green-dim);color:var(--green);background:rgba(61,220,145,0.06);}
 .badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,182,72,0.06);}
 .badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,92,108,0.08);}
+.badge.freq{border-color:rgba(94,200,255,0.35);color:var(--blue);background:rgba(94,200,255,0.06);}
 .badge.flag{border-style:dashed;}
 /* VFR dynamic state readout - a continuous readout, not a pass/fail/info
    flag, so styled as plain text rather than a .badge pill. See
@@ -216,17 +219,17 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .locline{margin-top:7px;padding:7px 9px;background:var(--panel-2);border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--text);}
 .mini-sketch{margin-top:7px;height:80px;border:1px dashed var(--line);border-radius:4px;position:relative;background:var(--panel-2);}
 .mini-sketch svg{position:absolute;inset:0;width:100%;height:100%;}
-.mini-sketch-label{position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--text-dimmer);}
+.mini-sketch-label{position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--text-dim);}
 .trio-group{display:block;}
-.trio-axis-label{font-size:9px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.5px;margin-top:8px;}
+.trio-axis-label{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-top:8px;}
 .carryover-note{font-size:11.5px;color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin-top:8px;}
 .state-strip{display:flex;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:8px;background:var(--panel-2);}
 .state-strip.warn{border-color:var(--amber-dim);}
 .state-strip.bad{border-color:var(--red-dim);}
 .state-cell{flex:1;padding:6px 10px;border-right:1px solid var(--line);}
 .state-cell:last-child{border-right:none;}
-.state-cell .lbl{font-size:9px;color:var(--text-dimmer);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;}
-.state-cell .val{font-family:'Space Grotesk',sans-serif;font-size:14.5px;font-weight:700;color:var(--text);}
+.state-cell .lbl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;}
+.state-cell .val{font-size:14.5px;font-weight:700;color:var(--text);}
 .state-strip.ok .state-cell:last-child .val{color:var(--green);}
 .state-strip.warn .state-cell:last-child .val{color:var(--amber);}
 .state-strip.bad .state-cell:last-child .val{color:var(--red);}
@@ -235,17 +238,18 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .strip-detail{display:none;padding:0 16px 16px 16px;border-top:1px solid var(--line);margin-top:0;}
 .strip.open .strip-detail{display:block;}
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;font-size:12px;}
-.detail-col h4{margin:0 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dimmer);}
+@media (max-width:400px){ .detail-grid{grid-template-columns:1fr;} }
+.detail-col h4{margin:0 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-dim);}
 .kv{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dotted var(--line);color:var(--text-dim);}
 .kv b{color:var(--text);font-weight:500;}
 .readback{color:var(--text-dim);font-style:italic;font-size:12.5px;margin-top:6px;}
-.readback .who{color:var(--text-dimmer);font-style:normal;font-size:10px;text-transform:uppercase;margin-right:6px;}
-.readback .rb-time{color:var(--text-dimmer);font-style:normal;font-size:10px;margin-right:6px;}
-.rawvoice{background:var(--panel-2);border-radius:6px;padding:8px 10px;color:var(--text-dimmer);font-size:11.5px;margin-top:10px;}
+.readback .who{color:var(--text-dim);font-style:normal;font-size:10px;text-transform:uppercase;margin-right:6px;}
+.readback .rb-time{color:var(--text-dim);font-style:normal;font-size:10px;margin-right:6px;}
+.rawvoice{background:var(--panel-2);border-radius:6px;padding:8px 10px;color:var(--text-dim);font-size:11.5px;margin-top:10px;}
 .mini-diagram{display:flex;align-items:center;gap:12px;background:var(--panel-2);border-radius:6px;padding:8px 10px;margin-top:10px;}
 .mini-diagram-legend{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--text-dim);}
 
-#emptyState{text-align:center;padding:60px 20px;color:var(--text-dimmer);}
+#emptyState{text-align:center;padding:60px 20px;color:var(--text-dim);}
 
 .section-title{font-size:13px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;margin:28px 0 12px;}
 </style>
@@ -276,11 +280,12 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
         <div class="cat-note-inline" id="hCatNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
+        <div class="cat-note-inline" id="hRegionNote" style="display:none;"></div>
         <div class="header-disclaimer">Every number in this tool comes from a logged radio-activity sample, not continuous real-time tracking — gaps of a minute or more between values are normal.</div>
       </div>
       <div class="statgrid" id="hStats"></div>
-      <button class="ghost" id="btnConfig">⚙ Thresholds</button>
-      <button class="ghost" id="btnReload">↺ New file</button>
+      <button class="ghost" id="btnConfig">⚙︎ Thresholds</button>
+      <button class="ghost" id="btnReload">↺︎ New file</button>
     </div>
   </header>
 
@@ -305,7 +310,15 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
     </div>
 
     <div class="filterbar" id="filterBar"></div>
-    <input type="text" id="searchBox" placeholder="Search instruction text…" style="width:100%;margin:0 0 16px;">
+    <div class="legend" id="badgeLegend" style="margin-bottom:14px;">
+      <span><span class="sw" style="background:var(--green);width:10px;height:10px;border-radius:50%;"></span>OK</span>
+      <span><span class="sw" style="background:var(--amber);width:10px;height:10px;border-radius:50%;"></span>Caution</span>
+      <span><span class="sw" style="background:var(--red);width:10px;height:10px;border-radius:50%;"></span>Violation</span>
+      <span><span class="badge flag" style="padding:2px 7px;">dashed</span>&nbsp;= flagged for extra review</span>
+      <span>State strip reads left→right: current reading, what was assigned, gap remaining to close</span>
+    </div>
+    <label for="searchBox" class="cat-note" style="display:block;">Search instruction text</label>
+    <input type="text" id="searchBox" placeholder="e.g. descend, runway 27, N123AB" style="width:100%;margin:0 0 16px;">
 
     <div class="section-title" id="listTitle">ATC Instructions</div>
     <div id="stripList"></div>
@@ -4300,7 +4313,7 @@ function loadLeg(idx){
     const what = PARSED.meta.actype
       ? `Aircraft type "${PARSED.meta.actype}" isn't in the category table`
       : `No aircraft type found in this log`;
-    catNote.innerHTML = `⚠ ${what} — using flat default thresholds, not tuned to this aircraft.<span class="link" id="hCatNoteLink">View category reference</span>`;
+    catNote.innerHTML = `⚠︎ ${what} — using flat default thresholds, not tuned to this aircraft.<button type="button" class="link" id="hCatNoteLink">View category reference</button>`;
     document.getElementById('hCatNoteLink').addEventListener('click', ()=>{
       document.getElementById('configPanel').classList.add('open');
       document.getElementById('categoryTable').scrollIntoView({behavior:'smooth', block:'center'});
@@ -4413,7 +4426,7 @@ function loadLeg(idx){
       : noDeparture
         ? 'starts mid-flight - no departure/ground state was captured (recording began after takeoff)'
         : 'ends before the aircraft came to a stop - no arrival/ground state was captured';
-    flightNote.innerHTML = `⚠ This log ${what}.`;
+    flightNote.innerHTML = `⚠︎ This log ${what}.`;
   }
   // Flight-wide header alert, not a per-exchange badge - there's no single
   // ATC instruction to attach a forgotten squawk to, unlike HDG/ALT/SPD
@@ -4428,7 +4441,7 @@ function loadLeg(idx){
     const what = xpdrAlert.turnedOnTime != null
       ? `stayed Off from liftoff (~${fmtTime(xpdrAlert.liftoffTime)}) until ~${fmtTime(xpdrAlert.turnedOnTime)}`
       : `stayed Off from liftoff (~${fmtTime(xpdrAlert.liftoffTime)}) and was never confirmed On for the rest of this log`;
-    xpdrNote.innerHTML = `⚠ Transponder ${what} — check for a missed squawk after takeoff.`;
+    xpdrNote.innerHTML = `⚠︎ Transponder ${what} — check for a missed squawk after takeoff.`;
   }
   PARSED.meta.topOfClimbLineIndex = deriveTopOfClimbLineIndex(PARSED.states, PARSED.meta.cruiseAlt);
 
@@ -4437,11 +4450,26 @@ function loadLeg(idx){
   const routeParts = [];
   if(m.flightRules) routeParts.push(`${m.flightRules.toUpperCase()}`);
   const guessedRegion = guessRegionFromAirport(m.orig) || guessRegionFromAirport(m.dest);
+  const regionNote = document.getElementById('hRegionNote');
   if(guessedRegion){
     const fromIcao = m.orig || m.dest;
     routeParts.push(guessedRegion==='unmodeled'
-      ? `<span title="Guessed from ${fromIcao}'s country - BeyondATC's actual region setting isn't logged. Its VFR feature only models US/UK/Australia phraseology, so treat compliance judgments here with extra caution.">apparent region: unmodeled (${fromIcao})</span>`
+      ? `apparent region: unmodeled (${fromIcao})`
       : `<span title="Guessed from ${fromIcao}'s country - BeyondATC's actual region setting isn't logged, this is inferred from airport location only.">apparent region: ${guessedRegion} (${fromIcao})</span>`);
+    // The "unmodeled" case is the one that actually needs to change how the
+    // user reads this tool's output (extra caution on every compliance
+    // judgment below), so it gets a visible line rather than a hover-only
+    // title - same treatment as hCatNote/hFlightNote/hXpdrNote above.
+    if(guessedRegion==='unmodeled'){
+      regionNote.style.display = 'block';
+      regionNote.innerHTML = `⚠︎ Guessed from ${fromIcao}'s country — BeyondATC's actual region setting isn't logged. Its VFR feature only models US/UK/Australia phraseology, so treat compliance judgments here with extra caution.`;
+    } else {
+      regionNote.style.display = 'none';
+      regionNote.innerHTML = '';
+    }
+  } else {
+    regionNote.style.display = 'none';
+    regionNote.innerHTML = '';
   }
   if(m.orig && m.dest) routeParts.push(`${m.orig} <b>${m.origrwy?('rwy '+m.origrwy+' '):''}</b>→ ${m.dest} <b>${m.destrwy?('rwy '+m.destrwy):''}</b>`);
   if(m.actype) routeParts.push(`${m.actype}`);
@@ -4465,7 +4493,7 @@ function loadLeg(idx){
       parts.push(`<a href="${m.simbriefUrl}" target="_blank" rel="noopener">Open in SimBrief</a>`);
     }
     const copyStr = (m.orig && m.dest) ? `${m.orig} ${m.route} ${m.dest}` : m.route;
-    parts.push(`<button type="button" class="route-copy-btn" id="hRouteCopyBtn">Copy Route</button>`);
+    parts.push(`<button type="button" class="route-copy-btn" id="hRouteCopyBtn" aria-live="polite">Copy Route</button>`);
     routeActions.innerHTML = parts.join(' &nbsp;·&nbsp; ');
     routeActions.style.display = 'flex';
     const copyBtn = document.getElementById('hRouteCopyBtn');
@@ -4475,17 +4503,34 @@ function loadLeg(idx){
         copyBtn.textContent = 'Copied!';
         setTimeout(()=>{ copyBtn.textContent = original; }, 1500);
       };
+      const showFailed = ()=>{
+        const original = copyBtn.textContent;
+        copyBtn.textContent = 'Copy failed';
+        setTimeout(()=>{ copyBtn.textContent = original; }, 1500);
+      };
+      // execCommand fallback - used both when navigator.clipboard doesn't
+      // exist at all (real on file:// pages, where the whole Clipboard API
+      // is undefined rather than just rejecting) and when writeText()
+      // itself rejects (permission denied/unsupported). Actually performs
+      // the copy via a temporary, off-screen, selected input before
+      // removing it - execCommand('copy') was previously missing here, so
+      // this path silently copied nothing.
+      const execCommandFallback = ()=>{
+        const tmp = document.createElement('input');
+        tmp.readOnly = true; tmp.value = copyStr;
+        tmp.style.position = 'fixed'; tmp.style.left = '-9999px';
+        document.body.appendChild(tmp);
+        tmp.select();
+        tmp.setSelectionRange(0, copyStr.length);
+        let ok = false;
+        try{ ok = document.execCommand('copy'); }catch{ ok = false; }
+        document.body.removeChild(tmp);
+        if(ok) showCopied(); else showFailed();
+      };
       if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(copyStr).then(showCopied).catch(()=>{
-          // Clipboard permission denied or unsupported in this context -
-          // fall back to a manual-select input so the copy still works.
-          const tmp = document.createElement('input');
-          tmp.readOnly = true; tmp.value = copyStr;
-          tmp.style.position = 'fixed'; tmp.style.left = '-9999px';
-          document.body.appendChild(tmp);
-          tmp.select();
-          document.body.removeChild(tmp);
-        });
+        navigator.clipboard.writeText(copyStr).then(showCopied).catch(execCommandFallback);
+      } else {
+        execCommandFallback();
       }
     });
   } else {
@@ -4524,7 +4569,7 @@ function buildConfigPanel(){
     const c = CFG[key];
     const div = document.createElement('div');
     div.className='cfg-item';
-    div.innerHTML = `<label>${c.label}</label><div class="row"><input type="number" data-key="${key}" value="${c.v}"><span class="unit">${c.unit}</span></div>`;
+    div.innerHTML = `<label for="cfg-${key}">${c.label}</label><div class="row"><input type="number" id="cfg-${key}" data-key="${key}" value="${c.v}"><span class="unit">${c.unit}</span></div>`;
     grid.appendChild(div);
   }
   grid.querySelectorAll('input').forEach(inp=>{
@@ -4586,6 +4631,18 @@ function statusCounts(){
   return {ok,warn,bad,none, total:EXCHANGES.length};
 }
 
+// Count of exchanges each pill would actually show if clicked - read
+// straight off the already-computed ex.eval.results/overall (same fields
+// matchesFilter itself reads), never re-derives compliance-detection logic.
+// Deliberately ignores the live searchTerm, since a pill's own count is
+// meant as a stable "how many of this type exist in this flight" figure,
+// not a live filtered-result count that would jitter as someone types.
+function pillCount(key){
+  if(key==='all') return EXCHANGES.length;
+  if(key==='flagged') return EXCHANGES.filter(ex=>ex.eval.overall==='warn' || ex.eval.overall==='bad').length;
+  return EXCHANGES.filter(ex=>ex.eval.results.some(r=>r.type===key)).length;
+}
+
 function buildFilterBar(){
   const bar = document.getElementById('filterBar');
   const defs = [
@@ -4602,7 +4659,7 @@ function buildFilterBar(){
   defs.forEach(d=>{
     const p = document.createElement('button');
     p.className = 'pill'+(d.key===activeFilter?' active':'');
-    p.textContent = d.label;
+    p.innerHTML = `${escapeHtml(d.label)}<span class="cnt">${pillCount(d.key)}</span>`;
     p.onclick = ()=>{ activeFilter = d.key; buildFilterBar(); renderList(); };
     bar.appendChild(p);
   });
@@ -4623,7 +4680,7 @@ function matchesFilter(ex){
 }
 
 function statusIcon(status){
-  return status==='ok' ? '✓' : status==='warn' ? '⚠' : status==='bad' ? '✕' : '·';
+  return status==='ok' ? '✓︎' : status==='warn' ? '⚠︎' : status==='bad' ? '✕︎' : '·';
 }
 
 // Mini compass for a missed (or still-in-progress carryover) heading:
@@ -4757,7 +4814,7 @@ function renderStrip(ex){
   // Design Docs/vfr-ifr-frequency-indicator.md.
   const isVfr = PARSED.meta.flightRules && PARSED.meta.flightRules.toUpperCase()==='VFR';
   const freq = (isVfr && ex.atc.state) ? parseFreq(ex.atc.state.com1) : null;
-  if(freq) badges += `<span class="badge freq">📻 ${freq}</span>`;
+  if(freq) badges += `<span class="badge freq">📻︎ ${freq}</span>`;
   // VFR dynamic state readout - nothing on the ground, HDG+ALT airborne,
   // HDG+ALT+SPD once ex.flightPhase (cached in recompute, see flightPhase)
   // says the aircraft is on approach. See
@@ -4773,17 +4830,25 @@ function renderStrip(ex){
   // (nothing on the ground - distance from the point you're sitting at
   // isn't useful) plus needing a real departure reference point captured
   // at all. See Design Docs/vfr-location-display.md.
+  // The dot-sketch itself is rendered only in the click-to-expand detail
+  // panel (moved 2026-09-13, design-review finding 5) - a near-identical
+  // 80px sketch repeated on every collapsed card was pure noise across a
+  // cruise-phase flight with many routine VFR check-ins. The collapsed head
+  // keeps only the one-line distance/bearing text, same treatment already
+  // given to the heading-compass diagram (diagramsHtml, detail-only below).
   const fieldElevations = PARSED.meta.fieldElevations;
   const departureLatLon = fieldElevations ? fieldElevations.departureLatLon : null;
-  const locationHtml = (isVfr && ex.atc.state && ex.flightPhase && ex.flightPhase!=='ground' && departureLatLon) ? (()=>{
+  const showLocation = isVfr && ex.atc.state && ex.flightPhase && ex.flightPhase!=='ground' && departureLatLon;
+  const locationHtml = showLocation ? (()=>{
     const s = ex.atc.state;
     const dist = distanceNm(departureLatLon.lat, departureLatLon.lon, s.lat, s.lon);
     const brg = bearingDeg(departureLatLon.lat, departureLatLon.lon, s.lat, s.lon);
     const origLabel = PARSED.meta.orig ? ` (${PARSED.meta.orig})` : '';
-    const locline = `<div class="locline">📍 ${dist.toFixed(1)}nm ${compassPoint(brg)} of departure${origLabel} · bearing ${Math.round(brg)}°</div>`;
-    const sketch = miniSketchSvg(departureLatLon, fieldElevations.arrivalLatLon, {lat:s.lat, lon:s.lon});
-    return locline + sketch;
+    return `<div class="locline">📍︎ ${dist.toFixed(1)}nm ${compassPoint(brg)} of departure${origLabel} · bearing ${Math.round(brg)}°</div>`;
   })() : '';
+  const locationSketchHtml = showLocation
+    ? miniSketchSvg(departureLatLon, fieldElevations.arrivalLatLon, {lat:ex.atc.state.lat, lon:ex.atc.state.lon})
+    : '';
   // HDG-only now - the ALT/SPD linear bar was retired (linearBarSvg removed)
   // once the trio started conveying the same assigned-vs-actual relationship
   // as plain numbers for those two axes; a heading compass stays since it's
@@ -4804,7 +4869,7 @@ function renderStrip(ex){
   const div = document.createElement('div');
   div.className = 'strip '+cls;
   div.innerHTML = `
-    <div class="strip-head">
+    <div class="strip-head" role="button" tabindex="0" aria-expanded="false">
       <div class="strip-time">${t}</div>
       <div class="strip-main">
         <div class="strip-instr"><span class="who">${ex.atc.speaker==='PILOT' ? pilotLabel(ex.atc) : 'ATC'}</span>${escapeHtml(ex.atc.text)}</div>
@@ -4830,8 +4895,9 @@ function renderStrip(ex){
       <div class="strip-chevron">▶</div>
     </div>
     <div class="strip-detail">
-      ${ex.atc.rawVoice ? `<div class="rawvoice">🔊 "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
+      ${ex.atc.rawVoice ? `<div class="rawvoice">🔊︎ "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
       ${diagramsHtml}
+      ${locationSketchHtml}
       ${trioGroupHtml(ex.otherTrios, true)}
       <div class="detail-grid">
         <div class="detail-col">
@@ -4850,14 +4916,24 @@ function renderStrip(ex){
                disagree when other ATC chatter falls in between - this is
                what triggered a real user's "196 vs 190, what does response
                window even mean?" confusion reading Player bad vector.log. -->
-          <h4 title="The aircraft's state at the very next ATC transmission of any kind - a short snapshot window, not necessarily the same window the compliance badge above was graded against.">State at next ATC transmission</h4>
+          <h4>State at next ATC transmission</h4>
+          <div class="cat-note" style="margin-top:-4px;">Not necessarily the same window the compliance badge above was graded against - this is a short snapshot at the very next ATC transmission of any kind.</div>
           ${ex.windowStates.length ? renderStateKV(ex.windowStates[ex.windowStates.length-1]) : '<div class="kv">No further data</div>'}
         </div>
       </div>
     </div>
   `;
-  div.querySelector('.strip-head').addEventListener('click', ()=>{
+  const stripHead = div.querySelector('.strip-head');
+  const toggleOpen = ()=>{
     div.classList.toggle('open');
+    stripHead.setAttribute('aria-expanded', div.classList.contains('open') ? 'true' : 'false');
+  };
+  stripHead.addEventListener('click', toggleOpen);
+  stripHead.addEventListener('keydown', (e)=>{
+    if(e.key==='Enter' || e.key===' ' || e.key==='Spacebar'){
+      e.preventDefault();
+      toggleOpen();
+    }
   });
   return div;
 }
@@ -4914,11 +4990,18 @@ function renderStats(){
     {filter:'bad', cls:'bad', n:counts.bad, l:'Violations'},
   ];
   stats.innerHTML = statDef.map(s=>
-    `<div class="stat clickable${s.cls?' '+s.cls:''}${activeFilter===s.filter?' active':''}" data-filter="${s.filter}">`+
+    `<div class="stat clickable${s.cls?' '+s.cls:''}${activeFilter===s.filter?' active':''}" data-filter="${s.filter}" role="button" tabindex="0" aria-pressed="${activeFilter===s.filter}">`+
     `<div class="n">${s.n}</div><div class="l">${s.l}</div></div>`
   ).join('');
   stats.querySelectorAll('.stat').forEach(el=>{
-    el.onclick = ()=>{ activeFilter = el.dataset.filter; renderStats(); buildFilterBar(); renderList(); };
+    const activate = ()=>{ activeFilter = el.dataset.filter; renderStats(); buildFilterBar(); renderList(); };
+    el.onclick = activate;
+    el.onkeydown = (e)=>{
+      if(e.key==='Enter' || e.key===' ' || e.key==='Spacebar'){
+        e.preventDefault();
+        activate();
+      }
+    };
   });
 }
 
@@ -4956,7 +5039,10 @@ function drawChart(){
     return {x:x(bestI), ex, color};
   }).filter(Boolean);
 
-  let markerEls = markers.map(m=>`<line x1="${m.x.toFixed(1)}" y1="${padT}" x2="${m.x.toFixed(1)}" y2="${H-padB}" stroke="${m.color}" stroke-width="1.5" opacity="0.55" class="marker" data-ex="${m.ex.id}" style="cursor:pointer"></line>`).join('');
+  let markerEls = markers.map(m=>{
+    const label = `Jump to instruction at ${fmtTime(m.ex.atc.state.timeMin)}: ${m.ex.atc.text}`;
+    return `<line x1="${m.x.toFixed(1)}" y1="${padT}" x2="${m.x.toFixed(1)}" y2="${H-padB}" stroke="${m.color}" stroke-width="1.5" opacity="0.55" class="marker" data-ex="${m.ex.id}" style="cursor:pointer" role="button" tabindex="0" aria-label="${escapeHtml(label)}"></line>`;
+  }).join('');
 
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="min-width:100%">
     <line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="var(--line)"/>
@@ -4970,7 +5056,7 @@ function drawChart(){
   </svg>`;
 
   host.querySelectorAll('.marker').forEach(el=>{
-    el.addEventListener('click', ()=>{
+    const jumpToExchange = ()=>{
       const exId = parseInt(el.dataset.ex);
       activeFilter='all'; searchTerm=''; document.getElementById('searchBox').value='';
       buildFilterBar(); renderList();
@@ -4979,6 +5065,13 @@ function drawChart(){
         const target = strips[exId];
         if(target){ target.scrollIntoView({behavior:'smooth', block:'center'}); target.classList.add('open'); }
       });
+    };
+    el.addEventListener('click', jumpToExchange);
+    el.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter' || e.key===' ' || e.key==='Spacebar'){
+        e.preventDefault();
+        jumpToExchange();
+      }
     });
   });
 }
@@ -5017,13 +5110,26 @@ dropbox.addEventListener('drop', e=>{
 function handleFile(file){
   const reader = new FileReader();
   reader.onload = () => {
-    try{
-      document.getElementById('parseError').textContent='';
-      initApp(reader.result);
-    }catch(err){
-      document.getElementById('parseError').textContent = 'Could not parse this file: '+err.message;
-      console.error(err);
-    }
+    document.getElementById('parseError').textContent='';
+    // Give some loading feedback before the heavy synchronous parse/render
+    // work below runs - handleFile -> initApp used to run entirely
+    // synchronously, so nothing ever appeared between choosing a file and
+    // the fully-rendered app showing up. Swap in a "Parsing…" state, then
+    // defer the actual work one tick so the browser gets a chance to
+    // paint that state first.
+    const bigEl = document.querySelector('#dropbox .big');
+    const originalBig = bigEl ? bigEl.textContent : null;
+    if(bigEl) bigEl.textContent = 'Parsing…';
+    setTimeout(()=>{
+      try{
+        initApp(reader.result);
+      }catch(err){
+        document.getElementById('parseError').textContent = 'Could not parse this file: '+err.message+' — confirm this is an unedited BeyondATC Player.log file.';
+        console.error(err);
+      } finally {
+        if(bigEl && originalBig!=null) bigEl.textContent = originalBig;
+      }
+    }, 0);
   };
   reader.onerror = () => {
     document.getElementById('parseError').textContent = 'Could not read this file.';
