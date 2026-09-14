@@ -468,6 +468,70 @@ function extractCallsignToken(line){
   if(m) return { token:m[1], strong:false };
   return null;
 }
+// Some BeyondATC flights get their real IFR clearance over a CPDLC data-link
+// message instead of voice - see Design Docs/cpdlc-clearance-parsing.md. The
+// `Message queued:` line is the one to key off (it carries named From=/To=/
+// MRN=/Content= fields); a `CPDLC_Relay:`/`Added new messages to
+// cpdlc_message_queue:` line a few lines away duplicates the same content
+// without those named fields, so it's ignored. MRN=/Resp= are absent on a
+// fresh message (e.g. the player's own initial `REQUEST PREDEP CLEARANCE`
+// request), hence both optional groups.
+const RE_CPDLC_MSG = /\[CPDLC\]\s+Message queued:\s+ID=(\d+)\s+Type=(\S+)\s+From=(\S+)\s+To=(\S+)(?:\s+MRN=(\d+))?(?:\s+Resp=\S+)?\s+Content=(.*)/;
+// Three confirmed real clearance-delivery shapes (Design Docs/
+// cpdlc-clearance-parsing.md's design review - library-wide scan found the
+// vectors/named-SID shapes each confirmed in exactly 1 real log, PDC in 4;
+// common but thin per-shape support, not broad coverage). All three are
+// tested against Content only after RE_CPDLC_CLEARANCE_SHAPE below confirms
+// it's actually a clearance and not routine chatter (frequency handoffs,
+// LOGON/LOGOFF, etc.) - those are deliberately never parsed further.
+const RE_CPDLC_CLEARANCE_SHAPE = /^(?:CLR|CLRD)\s+TO\b|^PRE DEPARTURE CLEARANCE\b/i;
+// "CLR" vs "CLRD" is not a reliable signal of which body shape follows -
+// confirmed real: `Player - Air Canada two-word callsign guess drops tail
+// exchanges.log` uses "CLRD TO ... EXPECT VECTORS AFTER DEP ..." (the
+// "CLRD" prefix normally paired with the named-SID body, here paired with
+// the vectors body instead) - both regexes accept either prefix and match
+// on the body shape instead. The optional text between SQUAWK and CALL
+// (an ATIS clause, sometimes absent) is skipped with a non-greedy `.*?`
+// rather than an exact optional-group match, so either real variant works.
+const RE_CPDLC_VECTORS = /^CLRD?\s+TO\s+@([\w-]+)@\s+RWY\s+@([\w]+)@\s+EXPECT VECTORS AFTER DEP\s+CLB\s+@(\d+)FT@\s+SQUAWK\s+@(\d+)@.*?CALL\s+(?:FREQ\s+)?@([\d.]+)@/i;
+const RE_CPDLC_SID = /^CLRD?\s+TO\s+@([\w-]+)@\s+RWY\s+@([\w]+)@\s+DEP\s+@([\w\d]+)@\s+CLB\s+@(\d+)FT@\s+SQUAWK\s+@(\d+)@.*?CALL\s+(?:FREQ\s+)?@([\d.]+)@/i;
+const RE_CPDLC_PDC = /^PRE DEPARTURE CLEARANCE CLEARED TO\s+@([\w-]+)@\s+AIRPORT\s+@([\w\d]+)@\s+THEN AS FILED\s+MAINTAIN\s+@(\d+)@FT.*?DPFREQ\s+@([\d.]+)@\s+SQUAWK\s+@(\d+)@/i;
+// Returns {kind, tokens} on a full match against one of the three known
+// templates, {kind:'unparsed'} when Content looks clearance-shaped
+// (RE_CPDLC_CLEARANCE_SHAPE) but matches none of them - surfaced visibly
+// rather than silently dropped, since the library-wide scan that found these
+// three shapes covered only 60 sample logs, not every real shape BeyondATC
+// can produce (design review finding 2) - or null when Content isn't a
+// clearance at all (a request, ack, frequency handoff, session-lifecycle
+// message - none of which this feature synthesizes, by design).
+function parseCpdlcClearanceContent(content){
+  const c = content.trim();
+  let m = c.match(RE_CPDLC_VECTORS);
+  if(m) return { kind:'vectors', tokens:{ dest:m[1], rwy:m[2], climbFt:parseInt(m[3]), squawk:m[4], freq:m[5] } };
+  m = c.match(RE_CPDLC_SID);
+  if(m) return { kind:'sid', tokens:{ dest:m[1], rwy:m[2], sidName:m[3], climbFt:parseInt(m[4]), squawk:m[5], freq:m[6] } };
+  m = c.match(RE_CPDLC_PDC);
+  if(m) return { kind:'pdc', tokens:{ dest:m[1], sidName:m[2], climbFt:parseInt(m[3]), freq:m[4], squawk:m[5] } };
+  if(RE_CPDLC_CLEARANCE_SHAPE.test(c)) return { kind:'unparsed' };
+  return null;
+}
+// Translates the parsed CPDLC tokens into a plain-English sentence using the
+// same phrasing real voiced clearances already use in this log format, so it
+// flows through the existing classify()/parseAltitudeClearance/
+// parseSquawkClearance machinery unchanged instead of needing new grading
+// code - see Design Docs/cpdlc-clearance-parsing.md's "key insight."
+function humanizeCpdlcClearance(kind, tokens){
+  if(kind === 'vectors'){
+    return `Cleared to ${tokens.dest}, runway ${tokens.rwy}, expect vectors after departure, climb and maintain ${tokens.climbFt}, squawk ${tokens.squawk}, contact ${tokens.freq} when ready.`;
+  }
+  if(kind === 'sid'){
+    return `Cleared to ${tokens.dest}, runway ${tokens.rwy}, via ${tokens.sidName} departure, climb and maintain ${tokens.climbFt}, squawk ${tokens.squawk}, contact ${tokens.freq} when ready.`;
+  }
+  if(kind === 'pdc'){
+    return `Pre-departure clearance: cleared to ${tokens.dest} airport, ${tokens.sidName} then as filed, maintain ${tokens.climbFt}, squawk ${tokens.squawk}, contact ${tokens.freq} when ready.`;
+  }
+  return 'CPDLC clearance received (not understood by this tool - see raw text).';
+}
 // Real (push-to-talk) pilot speech goes through a separate speech-to-text
 // pipeline instead of the [LocalVoiceInput]/[Instruction] pair used for
 // synthesized ATC voice and text-based readbacks. The "AI Processed" line
@@ -734,6 +798,15 @@ function parseLegLines(lines, startIdx, endIdx){
   let lastState = null, lastLVI = null, lastLVILine = -999, lastPlayerActionLine = -999;
   const states = [];       // all PlayerState samples, chronological
   const events = [];       // all Instruction events (ATC or PILOT)
+  // Message IDs of CPDLC clearances synthesized as real ATC events this leg -
+  // a later WILCO ack is only synthesized as this clearance's readback when
+  // its own MRN= references one of these, never on From= alone. See
+  // Design Docs/cpdlc-clearance-parsing.md's design review finding 3: gating
+  // on From= alone let an unrelated WILCO (acking routine chatter, no
+  // clearance nearby - confirmed real in Player (10).log) get picked up by
+  // buildExchanges' readback search and misattributed to a different,
+  // unrelated voiced ATC instruction.
+  const cpdlcSynthesizedIds = new Set();
   let meta = { cruiseAlt:null, orig:null, dest:null, origrwy:null, destrwy:null, actype:null, route:null, simbriefUrl:null, playerCallsigns:[], procedureCandidates:[],
     planHasSid:null, planHasStar:null, plannedSid:null, plannedSidTrans:null, plannedStar:null, plannedStarTrans:null, plannedDepRwy:null, plannedArrRwy:null, flightRules:null };
 
@@ -815,6 +888,52 @@ function parseLegLines(lines, startIdx, endIdx){
           // [PlayerAction] tag in this log format) otherwise matches startRe
           // exactly like a genuine ATC instruction does.
           speechTranscription: true,
+          state: lastState
+        });
+      }
+      continue;
+    }
+
+    if((m = line.match(RE_CPDLC_MSG))){
+      const [, msgId, , from, to, mrn, content] = m;
+      // Clearance delivery: To= is the player, a structured field naming the
+      // exact recipient - more reliable than the [Procedures] engine-log
+      // proximity heuristic below, no correlation-guessing needed.
+      if(meta.playerCallsigns.includes(to)){
+        const parsed = parseCpdlcClearanceContent(content);
+        if(parsed){
+          cpdlcSynthesizedIds.add(msgId);
+          events.push({
+            lineIndex: i,
+            text: humanizeCpdlcClearance(parsed.kind, parsed.tokens),
+            rawVoice: content.trim(),
+            sid: null,
+            speaker: 'ATC',
+            cpdlcClearance: true,
+            cpdlcId: msgId,
+            cpdlcTokens: parsed.tokens || null,
+            cpdlcKind: parsed.kind,
+            state: lastState // may be null if issued before the leg's first
+                              // PlayerState sample (confirmed real: this
+                              // clearance is often the very first thing in a
+                              // leg) - backfilled from the nearest FOLLOWING
+                              // state once `states` is complete, see below.
+          });
+        }
+        continue;
+      }
+      // Acknowledgment: only synthesized when From= is the player AND MRN=
+      // links back to a clearance this leg actually synthesized above -
+      // never on a bare WILCO/From= match (design review finding 3).
+      if(mrn && cpdlcSynthesizedIds.has(mrn) && meta.playerCallsigns.includes(from) && /^WILCO$/i.test(content.trim())){
+        events.push({
+          lineIndex: i,
+          text: 'Wilco.',
+          rawVoice: content.trim(),
+          sid: null,
+          speaker: 'PILOT',
+          cpdlcAck: true,
+          cpdlcMrn: mrn,
           state: lastState
         });
       }
@@ -910,6 +1029,24 @@ function parseLegLines(lines, startIdx, endIdx){
       if(/VerifyCallsignAltitudeScript/.test(lines[k])){ e.checkInVerified = true; break; }
     }
   }
+
+  // A CPDLC clearance (or its WILCO ack) is frequently the very first thing
+  // in a leg - issued before the log's first PlayerState sample, confirmed
+  // real in Player 9-13 2.log (clearance at line 422, first PlayerState at
+  // 449) - so `state: lastState` above is often still null at that point.
+  // Anchor to the nearest FOLLOWING state instead of leaving it null:
+  // without a state, evaluateExchange's ground-clearance path
+  // (startState = ex.atc.state) has nothing to grade the climb/squawk
+  // against at all. See Design Docs/cpdlc-clearance-parsing.md's design
+  // review finding 4. Covers cpdlcAck too (QA gate finding 5) - the ack's
+  // own state feeds the "Readback delayed" RESP check the same way a real
+  // voice readback's state does; leaving it null just silently skips that
+  // check rather than crashing, but there's no reason to leave the gap.
+  events.forEach(e=>{
+    if((e.cpdlcClearance || e.cpdlcAck) && !e.state){
+      e.state = states.find(s => s.lineIndex >= e.lineIndex) || null;
+    }
+  });
 
   meta.flightRules = findFlightRulesForLeg(lines, startIdx);
   return { meta, states, events };
@@ -1326,6 +1463,19 @@ function buildExchanges(parsed){
         if(!atcHandedOffFreq && isInitialContactShape(events[j].text, callsigns)) break;
         readback = events[j]; break;
       }
+    }
+    // A CPDLC clearance's own ack runs on a separate data-link channel from
+    // the voice channel this generic proximity search assumes - real voice
+    // exchanges routinely interleave between a clearance and its own WILCO
+    // (confirmed live against Player 9-13 2.log: 3 unrelated voice
+    // instructions sit between the clearance and its ack), so the generic
+    // "next PILOT event within 4" search reliably grabs the wrong one.
+    // Override with the deterministic MRN->ID match instead - correct
+    // regardless of how much unrelated voice chatter interleaves, and
+    // correctly null (no readback captured) when no matching ack exists at
+    // all, e.g. the PDC fixture with no WILCO anywhere in the log.
+    if(atc.cpdlcClearance){
+      readback = events.find(e => e.cpdlcAck && e.cpdlcMrn === atc.cpdlcId) || null;
     }
     const clearance = classified[idx];
     // Deliberately does NOT include clearance.squawk (an earlier draft did -
@@ -2009,6 +2159,29 @@ function deriveDepartureVectors(exchanges, liftoffLineIndex){
     if(ex.atc && ex.atc.text){
       const m = ex.atc.text.match(/radar vectors\s+([A-Z0-9]+),?\s*then as filed/i);
       if(m) return { fix: m[1].toUpperCase() };
+    }
+  }
+  return null;
+}
+
+// The real, structured CPDLC-delivered departure statement (see
+// Design Docs/cpdlc-clearance-parsing.md) - read directly from the
+// synthesized clearance event's own parsed token bundle, not re-scanning its
+// humanized text, since the tokens are more precise than a regex re-match
+// would be. This is what actually fixes the reported bug: without it, the
+// #hProcedures precedence chain falls through to `assignedProc.sid` (an
+// internal engine SID guess) even when a real CPDLC clearance said "expect
+// vectors" - actively contradicting it, not just omitting it.
+function deriveCpdlcDeparture(exchanges){
+  for(const ex of exchanges){
+    if(ex.atc && ex.atc.cpdlcClearance && ex.atc.cpdlcTokens){
+      const { kind, tokens } = { kind: ex.atc.cpdlcKind, tokens: ex.atc.cpdlcTokens };
+      if(kind === 'vectors') return { type:'vectors', runway: tokens.rwy };
+      // 'pdc' (pre-departure clearance) names its departure procedure the
+      // same way 'sid' does ("AIRPORT @SID@ THEN AS FILED" is structurally
+      // the CLRD template's "DEP @SID@" said differently) but carries no
+      // runway token at all - runway stays null rather than guessed.
+      if(kind === 'sid' || kind === 'pdc') return { type:'sid', name: tokens.sidName, runway: tokens.rwy || null };
     }
   }
   return null;
@@ -4244,7 +4417,14 @@ function refineSpeakersByCallsign(events, callsign){
     // transcript-accuracy bug, same shape as the fifth speaker-
     // misclassification gap above, not a grading regression, since a bare
     // request carries no clearance for evaluateExchange to grade either way.
-    if(e.playerActionTriggered || e.speechTranscription) return;
+    // cpdlcClearance/cpdlcAck (synthesized in parseLegLines from a [CPDLC]
+    // data-link message, see Design Docs/cpdlc-clearance-parsing.md) are
+    // the same kind of hardcoded-not-guessed marker: a CPDLC clearance's
+    // humanized text always leads with "Cleared to..."/"Pre-departure
+    // clearance:..." (ATC-shaped), and its WILCO ack is a bare "Wilco."
+    // with no callsign at all - neither would survive this heuristic
+    // correctly if left to it.
+    if(e.playerActionTriggered || e.speechTranscription || e.cpdlcClearance || e.cpdlcAck) return;
     const t = e.text.trim();
     if(holdingShortRe.test(t)) e.speaker = 'PILOT';
     else if(startRe.test(t)) e.speaker = 'ATC';
@@ -4339,16 +4519,30 @@ function loadLeg(idx){
   const liftoffLineIndex = airborne0 ? airborne0.lineIndex : Infinity;
   const departureVectors = deriveDepartureVectors(EXCHANGES, liftoffLineIndex);
   const assignedApproach = deriveAssignedApproach(EXCHANGES);
+  // Real CPDLC-delivered departure statement (see Design Docs/
+  // cpdlc-clearance-parsing.md) - ranked directly under the existing voiced
+  // "radar vectors X, then as filed" case (both are the real clearance
+  // actually delivered to the player; the voiced form names a specific fix
+  // and so is slightly more specific when both happen to be present) and
+  // ahead of the internal engine's own guesses below, since those are never
+  // more authoritative than what was actually cleared.
+  const cpdlcDeparture = deriveCpdlcDeparture(EXCHANGES);
   const procParts = [];
   const plannedDep = formatPlannedProcedure(PARSED.meta.planHasSid, PARSED.meta.plannedSid, PARSED.meta.plannedDepRwy, 'SID');
   if(plannedDep) procParts.push(plannedDep);
   const plannedArr = formatPlannedProcedure(PARSED.meta.planHasStar, PARSED.meta.plannedStar, PARSED.meta.plannedArrRwy, 'STAR');
   if(plannedArr) procParts.push(plannedArr);
   // Departure/arrival precedence: the most authoritative source that's
-  // actually known wins - voiced vectors clearance, then the engine's own
-  // "No SID/STAR available" signal, then the existing assigned-candidate
-  // fallback (unchanged from before this feature).
+  // actually known wins - voiced vectors clearance, then a real CPDLC
+  // clearance, then the engine's own "No SID/STAR available" signal, then
+  // the existing assigned-candidate fallback (unchanged from before this
+  // feature). This directly fixes the reported bug: without the CPDLC step,
+  // a real "expect vectors after dep" CPDLC clearance fell all the way
+  // through to the internal engine's own SID guess, actively contradicting
+  // the real clearance rather than just omitting it.
   if(departureVectors) procParts.push(`Departure: Radar vectors to ${departureVectors.fix}, then as filed`);
+  else if(cpdlcDeparture && cpdlcDeparture.type==='vectors') procParts.push(`Departure: Radar vectors after departure (CPDLC), rwy ${cpdlcDeparture.runway}`);
+  else if(cpdlcDeparture && cpdlcDeparture.type==='sid') procParts.push(`Departure: SID ${cpdlcDeparture.name}${cpdlcDeparture.runway ? `, rwy ${cpdlcDeparture.runway}` : ''} (CPDLC)`);
   else if(vectoredProc.sid) procParts.push(`Departure: no SID computed, rwy ${vectoredProc.sid.runway} (vectored)`);
   else if(assignedProc.sid) procParts.push(`Departure: SID ${assignedProc.sid.name}, rwy ${assignedProc.sid.runway}`);
   if(vectoredProc.star) procParts.push(`Arrival: no STAR computed, rwy ${vectoredProc.star.runway} (vectored)`);

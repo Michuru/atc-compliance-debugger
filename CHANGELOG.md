@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.15.0] - 2026-09-14
+
+### Added
+- **CPDLC data-link clearance parsing**: some flights get their real IFR clearance over a text data-link message instead of a voice radio call — the tool previously ignored these entirely, so the clearance and the pilot's acknowledgment of it never showed up anywhere, and the departure-procedures header line could show a plainly wrong guess ("Departure: SID PARKS4, rwy 03") that directly contradicted what the real data-link clearance actually said ("expect vectors after departure"). Now recognized: vectors-after-departure, named-SID, and pre-departure-clearance (PDC) shapes, each shown as a real instruction card with its climb/squawk targets graded the same way a voiced clearance is, and the header labeled "(CPDLC)" so it's clear where the information came from. A data-link clearance in an unrecognized shape now shows a visible "not understood by this tool" marker instead of silently vanishing.
+
 ## [1.14.2] - 2026-09-13
 
 ### Fixed
