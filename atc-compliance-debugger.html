@@ -4753,7 +4753,12 @@ function miniSketchSvg(departure, destination, current){
   const dep = toSvg(nmPts.departure), cur = toSvg(nmPts.current);
   const dest = nmPts.destination ? toSvg(nmPts.destination) : null;
 
-  const lineHtml = dest ? `<line x1="${dep.x.toFixed(1)}" y1="${dep.y.toFixed(1)}" x2="${dest.x.toFixed(1)}" y2="${dest.y.toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="4 3"/>` : '';
+  // No captured landing (destination unknown) still gets a dashed dep->current
+  // line, not a bare pair of disconnected dots - a log that ends mid-flight
+  // (e.g. a sim crash before landing) otherwise looks broken rather than
+  // intentional. See Design Docs/vfr-location-display.md's follow-up note.
+  const lineEnd = dest || cur;
+  const lineHtml = `<line x1="${dep.x.toFixed(1)}" y1="${dep.y.toFixed(1)}" x2="${lineEnd.x.toFixed(1)}" y2="${lineEnd.y.toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="4 3"/>`;
   const destDotHtml = dest ? `<circle cx="${dest.x.toFixed(1)}" cy="${dest.y.toFixed(1)}" r="4" fill="var(--text-dimmer)"/>` : '';
 
   return `<div class="mini-sketch">

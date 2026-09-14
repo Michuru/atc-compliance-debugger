@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.14.2] - 2026-09-13
+
+### Fixed
+- On a VFR flight that ends before the aircraft comes to a stop (e.g. a sim crash before landing), the small offline dot-sketch no longer shows two disconnected dots with no line between them — it now draws the same dashed line from departure to the current position instead, so an in-progress/incomplete flight still reads as a coherent sketch rather than looking broken.
+
 ## [1.14.1] - 2026-09-13
 
 ### Fixed
