@@ -4,6 +4,20 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.16.0] - 2026-09-15
+
+### Changed
+- **Visual identity redesign, "Amber Terminal"**: replaces the original dark green/amber "radar scope" palette and fonts (Space Grotesk + JetBrains Mono) with a single warm amber-on-near-black vintage-instrument look (IBM Plex Mono throughout). The upload screen's spinning radar-sweep animation is now an oscillating gauge-needle swing. The flight-profile chart's "Instruction marker" legend, previously a single fixed color that never matched what the chart actually drew, now shows a 4-dot cluster colored by outcome, same as the markers themselves. Compliance-detection logic is unchanged — this is a rendering-only update.
+- SPEC.md: "Yellow (warn)" relabeled "Amber (warn)" to match the actual color used, past and present.
+
+### Fixed
+- The offline VFR dot-sketch's visual bearing could silently drift from its own printed bearing text on any card not rendered at a very specific width, because the sketch stretched non-uniformly to fill its container instead of preserving its aspect ratio.
+- The VFR heading/altitude/speed readout was colored the same green used elsewhere for "compliant," despite being a plain live reading with no pass/fail meaning of its own.
+- The "Correcting the readback above" note was nested inside the same clickable region as the card's own expand/collapse toggle, an accessibility issue (ambiguous to screen readers, a duplicate keyboard tab stop) — it's now a real, separate button above the card.
+- A few remaining low-contrast text spots (introduced after the 2026-09-13 contrast pass) brightened to the same readable tier as the rest of the tool.
+- Every interactive element now shows a visible focus outline when navigated by keyboard — previously relied entirely on the browser's unthemed default.
+- The VFR sketch's "abstract sketch, not a real map" disclaimer no longer repeats on every card — moved to a single note under the flight header.
+
 ## [1.15.0] - 2026-09-14
 
 ### Added
