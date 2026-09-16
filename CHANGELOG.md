@@ -4,6 +4,18 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.17.0] - 2026-09-16
+
+### Added
+- **Approach type shown even without a formal clearance**: some flights never receive an explicit "cleared for the approach" instruction - only an advisory "expect radar vectors for ILS approach runway X" followed by vectors straight to landing. The procedures line now names the approach type it heard mentioned, labeled "(ILS approach expected)," instead of falling back to a bare, type-less "Cleared to land."
+- **"Depart FIX heading X" phraseology recognized**: the real FAA JO 7110.65 controller phrasing (which BeyondATC's own "leave FIX heading X" was already known to paraphrase) turned out to also appear verbatim in real logs, and was previously invisible to the tool entirely - no heading tracking would start at all for the rest of the flight. Now recognized identically to "leave FIX heading X."
+- **A slow response now names the real peak reached in between**: when a target was already within tolerance at the exact instant of the instruction, but the aircraft genuinely moved off target before settling back onto it, the finding now reads e.g. "reached in ~7m, peaked at 276kt (+16kt) before complying" instead of a bare "reached in ~7m" with no indication of what happened during that time.
+- **Every open axis's readout now shows directly on the card**, not just the one this specific instruction addresses - a card whose own instruction is only about speed still shows an altitude readout too, right alongside it, if an earlier climb clearance is still open. Previously, any axis besides the card's own (or, for a non-clearance card, whichever was most recently assigned) was relegated to a click-to-expand section.
+
+### Fixed
+- A card that carried forward a still-open axis it didn't itself address could render that axis's readout in a false "on target" green, even when the aircraft was genuinely far off target and the card had never actually checked it - the color now correctly reflects the axis's own most recent verdict, or a neutral non-color when nothing was checked on that specific card.
+
+
 ## [1.16.0] - 2026-09-15
 
 ### Changed

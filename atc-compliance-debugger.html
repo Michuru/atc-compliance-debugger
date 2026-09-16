@@ -1252,6 +1252,17 @@ function parseHeadingClearance(text){
   // instant of the radio call.
   m = text.match(/leave\s+([\w-]+)\s+heading\s*(\d{2,3})/i);
   if(m) return { direction:null, targetHdg: parseInt(m[2]), raw:m[0], fixTriggered:true, fixName:m[1] };
+  // "Depart (FIX) heading (XXX)" is the actual FAA JO 7110.65 controller
+  // phraseology the comment above already named as what "leave FIX heading"
+  // paraphrases - turns out BeyondATC also emits it verbatim, unparsed
+  // until now. Confirmed real: Noble 2489, "depart HEDMN heading 205,
+  // expect radar vectors for visual approach runway 17L" (Player 9-15
+  // 3.log) - clearance.heading stayed null, so no HDG target ever opened
+  // and no heading trio/tracking appeared anywhere for the rest of the
+  // flight. Same fixTriggered semantics as "leave" - the aircraft is still
+  // expected to be inbound to/at FIX at the moment of the call.
+  m = text.match(/depart\s+([\w-]+)\s+heading\s*(\d{2,3})/i);
+  if(m) return { direction:null, targetHdg: parseInt(m[2]), raw:m[0], fixTriggered:true, fixName:m[1] };
   return null;
 }
 
@@ -2194,6 +2205,31 @@ function deriveAssignedApproach(exchanges){
   return null;
 }
 
+// Fallback for the #hProcedures summary line ONLY, not a formal clearance
+// signal - parseApproachClearance requires "cleared ... approach" and is the
+// authoritative source deriveAssignedApproach above reaches for first. Some
+// real flights never get a formal approach clearance spoken at all: ATC only
+// says "expect radar vectors for ILS approach runway 03" (advisory, not a
+// clearance) and vectors the aircraft onto the localizer, going straight to
+// "cleared to land" with no "cleared for the approach" in between. Confirmed
+// real: Ryanair 8EC (Player 9-15 6.log, EGPK->GCRR) - the summary line showed
+// bare "Cleared to land rwy 03" with no hint the approach was ILS, despite
+// ATC saying so explicitly. This scans ALL ATC text (not just clearances)
+// for a bare "<kind> approach" mention, purely to answer "what approach was
+// this" for the summary - deliberately NOT fed back into ex.clearance.approach
+// or any compliance-grading path, since "expect X" is advisory, not a real
+// clearance the aircraft could be graded against.
+function deriveExpectedApproachKind(exchanges){
+  let found = null;
+  for(const ex of exchanges){
+    const text = ex.atc && ex.atc.text;
+    if(!text) continue;
+    const m = text.match(/\b(ils|visual|rnav[\s-]?[a-z]?|vor|loc|lda|gps|ndb)\s+approach\b(?:\s+runway\s*(\w+))?/i);
+    if(m) found = { kind: m[1].trim(), runway: m[2] || null };
+  }
+  return found;
+}
+
 // BeyondATC's engine sometimes computes a SID internally despite the voiced
 // IFR clearance never naming it - confirmed real via the "Radar vectors
 // MOGEE, then as filed" clearance template, used specifically when no
@@ -2395,13 +2431,51 @@ function evaluateExchange(ex, cfg){
         const d = headingDiff(s.hdg, target);
         if(d > cfg.hdgTol && (!worstDrift || d > headingDiff(worstDrift.hdg, target))) worstDrift = s;
       }
+      // Same idea as worstDrift above, other direction - see ALT's matching
+      // worstPreCompliance comment for the full rationale and the real log
+      // that surfaced it (Player 9-15 4.log). The trio's own reading is
+      // ex.atc.state, the state nearest the instruction - often already
+      // near-target for a plain "turn/fly heading X" reissue, so a genuine
+      // bust entirely between that reading and compliedAt would otherwise
+      // show "0°, on target" the whole time with no hint why a slow delay
+      // got flagged.
+      // Gated on the attached reading (startState) already being within
+      // tolerance at the instruction - see ALT's matching comment above for
+      // why: otherwise this misfires on every ordinary clearance still
+      // legitimately turning toward a heading it hasn't reached yet.
+      let worstPreCompliance = null;
+      if(startState && headingDiff(startState.hdg, target) <= cfg.hdgTol){
+        const beforeCompliance = hdgWin.slice(0, compliedIdx).filter(s => !hasStoppedFlying(s));
+        for(const s of beforeCompliance){
+          const d = headingDiff(s.hdg, target);
+          if(d > cfg.hdgTol && (!worstPreCompliance || d > headingDiff(worstPreCompliance.hdg, target))) worstPreCompliance = s;
+        }
+      }
+      // Pre-computed here so both the worstDrift and worstPreCompliance
+      // branches below can fold it in - an independent code-reviewer pass
+      // caught two real gaps in the first draft: (1) worstPreCompliance had
+      // no releasedByApproach softening at all, unlike its worstDrift
+      // sibling; (2) worstDrift always won outright when both were real,
+      // silently dropping the pre-compliance story. Both branches now
+      // report the pre-compliance peak (if any) and apply the same
+      // approach-release softening symmetrically.
+      const preDiff = worstPreCompliance ? Math.round(headingDiff(worstPreCompliance.hdg, target)) : null;
+      const preReleased = preDiff!=null && releasedByApproach && preDiff <= cfg.vectorReleaseTol;
+      const preNote = worstPreCompliance ? `, peaked at ${Math.round(worstPreCompliance.hdg)}° (${preDiff}° off) before first complying` : '';
       if(worstDrift){
         const driftDiff = Math.round(headingDiff(worstDrift.hdg, target));
-        if(releasedByApproach && driftDiff <= cfg.vectorReleaseTol){
-          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then continued turning to ${Math.round(worstDrift.hdg)}° — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
+        if(releasedByApproach && driftDiff <= cfg.vectorReleaseTol && (preDiff==null || preReleased)){
+          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then continued turning to ${Math.round(worstDrift.hdg)}° — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
         } else {
-          const status = driftDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
-          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
+          const status = (driftDiff <= cfg.hdgTol*2 && (preDiff==null || preDiff <= cfg.hdgTol*2)) ? 'warn' : 'bad';
+          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
+        }
+      } else if(worstPreCompliance){
+        if(preReleased){
+          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote} — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
+        } else {
+          const status = preDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
+          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}`});
         }
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
@@ -2814,19 +2888,74 @@ function evaluateExchange(ex, cfg){
       // cleared ILS approach runway 33" complied near the fix, then
       // correctly kept descending to 2,512ft on the approach - misjudged as
       // a "-3488ft" bust before this branch also exempted pointRestriction.
+      const compliedIdx = altWin.indexOf(compliedAt);
       if(!untilEstablished && !pointRestriction){
-        const compliedIdx = altWin.indexOf(compliedAt);
         const afterCompliance = altWin.slice(compliedIdx+1).filter(s => !hasStoppedFlying(s));
         for(const s of afterCompliance){
           const d = Math.abs(s.alt - targetFt);
           if(d > cfg.altTol && (!worstDrift || d > Math.abs(worstDrift.alt - targetFt))) worstDrift = s;
         }
       }
+      // The OTHER direction from worstDrift above: did the aircraft actually
+      // stay within tolerance on the way TO compliedAt, or did it overshoot/
+      // bust past the target first and only settle back later? The trio's
+      // own "current reading" cell only ever shows ex.atc.state - the state
+      // nearest the INSTRUCTION itself, which for a "maintain X" is often
+      // already near-target (that's often why ATC phrased it as "maintain"
+      // rather than "climb/descend/reduce/increase") - so a genuine bust
+      // occurring entirely AFTER that reading and before compliedAt was
+      // completely invisible: the trio showed "0ft/0kt, on target" the whole
+      // time, and the plain "reached in ~Xm" label gave no hint why a slow
+      // delay was flagged. Confirmed real (SPD's mirror of this exact case,
+      // Player 9-15 4.log, Speedbird 83K "maintain speed 260 kts" - already
+      // at 262kt when instructed, then a genuine 16kt overspeed bust to
+      // 276kt for ~7 minutes before recompliance, entirely unshown). Same
+      // Deliberately NOT gated on untilEstablished, unlike worstDrift above -
+      // an independent code-reviewer pass caught that worstDrift's carve-out
+      // is a POST-compliance-only rationale (continuing past the interim
+      // altitude once established on the approach is expected localizer
+      // capture, not drift) that doesn't transfer to the pre-compliance
+      // direction: a real deviation from "maintain X until established"
+      // BEFORE the aircraft is ever established is a genuine violation, not
+      // expected capture behavior, and blanket-exempting it here would have
+      // silently dropped it with no flag at all. pointRestriction is still
+      // exempted - a one-time fix-crossing check isn't a continuously-held
+      // target in either direction, which does transfer cleanly. Gated on
+      // the ATTACHED reading (startState, same one the trio itself displays)
+      // already being within tolerance at the moment of the instruction -
+      // this is specifically the "trio shows on-target, but something
+      // happened before compliedAt confirmed it" contradiction, NOT the
+      // ordinary case of a fresh clearance still legitimately approaching a
+      // target it hasn't reached yet.
+      let worstPreCompliance = null;
+      if(!pointRestriction && startState && Math.abs(startState.alt - targetFt) <= cfg.altTol){
+        const beforeCompliance = altWin.slice(0, compliedIdx).filter(s => !hasStoppedFlying(s));
+        for(const s of beforeCompliance){
+          const d = Math.abs(s.alt - targetFt);
+          if(d > cfg.altTol && (!worstPreCompliance || d > Math.abs(worstPreCompliance.alt - targetFt))) worstPreCompliance = s;
+        }
+      }
       if(worstDrift){
         const driftFt = Math.round(worstDrift.alt - targetFt);
-        const status = Math.abs(driftFt) <= cfg.altTol*2 ? 'warn' : 'bad';
+        let status = Math.abs(driftFt) <= cfg.altTol*2 ? 'warn' : 'bad';
         const dir = driftFt > 0 ? 'climbed to' : 'descended to';
-        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`});
+        // A genuine pre-compliance bust AND a genuine post-compliance drift
+        // can both be real in the same window - an independent code-reviewer
+        // pass caught that reporting only whichever branch runs first would
+        // silently drop the other's story entirely. Fold the pre-compliance
+        // peak into this label (and let it escalate the overall status)
+        // instead of discarding it.
+        let preNote = '';
+        if(worstPreCompliance){
+          const peakDiff = Math.round(worstPreCompliance.alt - targetFt);
+          if(Math.abs(peakDiff) > cfg.altTol*2) status = 'bad';
+          preNote = `, peaked at ${Math.round(worstPreCompliance.alt).toLocaleString()}ft (${peakDiff>0?'+':''}${peakDiff}ft) before first complying`;
+        }
+        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}${preNote}, then ${dir} ${Math.round(worstDrift.alt).toLocaleString()}ft (${driftFt>0?'+':''}${driftFt}ft) before the next instruction`});
+      } else if(worstPreCompliance){
+        const peakDiff = Math.round(worstPreCompliance.alt - targetFt);
+        const status = Math.abs(peakDiff) <= cfg.altTol*2 ? 'warn' : 'bad';
+        results.push({type:'ALT', status, label:`ALT ${targetFt.toLocaleString()} — reached${note}, peaked at ${Math.round(worstPreCompliance.alt).toLocaleString()}ft (${peakDiff>0?'+':''}${peakDiff}ft) before complying`});
       } else {
         // "reached" (not a bare checkmark + number) so it's unambiguous
         // this is a completed, already-observed climb/descent - "35,000
@@ -3374,11 +3503,51 @@ function evaluateExchange(ex, cfg){
         const d = Math.abs(s.spd - targetKt);
         if(d > cfg.spdTol && (!worstDrift || d > Math.abs(worstDrift.spd - targetKt))) worstDrift = s;
       }
+      // Same idea as worstDrift above, other direction - the real bug this
+      // was built for. The trio's own reading is ex.atc.state, the state
+      // nearest the instruction - for a "maintain X kts" that's frequently
+      // already within tolerance (that's often exactly why ATC phrased it
+      // as "maintain"), so a genuine bust occurring entirely AFTER that
+      // reading and before compliedAt was completely invisible: the trio
+      // showed "0kt, on target" for the whole card, and "reached in ~Xm"
+      // gave no hint why a slow delay got flagged amber. Confirmed real:
+      // Player 9-15 4.log, Speedbird 83K "maintain speed 260 kts" - already
+      // at 262kt (within cfg.spdTol) when instructed, then a genuine climb
+      // to 276kt (+16kt over) during the following descent, not settling
+      // back under tolerance until ~7 minutes later - the user correctly
+      // flagged the contradiction between "0kt, on target" and a 7-minute
+      // amber "reached" label with nothing shown in between.
+      // Gated on the attached reading (startState) already being within
+      // tolerance at the instruction - see ALT's matching comment above for
+      // why: otherwise this misfires on every ordinary clearance still
+      // legitimately working toward a speed it hasn't reached yet.
+      let worstPreCompliance = null;
+      if(startState && Math.abs(startState.spd - targetKt) <= cfg.spdTol){
+        const beforeCompliance = spdWinFull.slice(0, compliedIdx).filter(s => !hasStoppedFlying(s));
+        for(const s of beforeCompliance){
+          const d = Math.abs(s.spd - targetKt);
+          if(d > cfg.spdTol && (!worstPreCompliance || d > Math.abs(worstPreCompliance.spd - targetKt))) worstPreCompliance = s;
+        }
+      }
       if(worstDrift){
         const driftKt = Math.round(worstDrift.spd - targetKt);
-        const status = Math.abs(driftKt) <= cfg.spdTol*2 ? 'warn' : 'bad';
+        let status = Math.abs(driftKt) <= cfg.spdTol*2 ? 'warn' : 'bad';
         const dir = driftKt > 0 ? 'sped up to' : 'slowed to';
-        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`});
+        // Same code-reviewer finding as ALT/HDG above: a genuine
+        // pre-compliance bust and a genuine post-compliance drift can both
+        // be real in the same window - fold the pre-compliance peak in
+        // rather than silently dropping it when worstDrift also fires.
+        let preNote = '';
+        if(worstPreCompliance){
+          const peakDiff = Math.round(worstPreCompliance.spd - targetKt);
+          if(Math.abs(peakDiff) > cfg.spdTol*2) status = 'bad';
+          preNote = `, peaked at ${Math.round(worstPreCompliance.spd)}kt (${peakDiff>0?'+':''}${peakDiff}kt) before first complying`;
+        }
+        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}${preNote}, then ${dir} ${Math.round(worstDrift.spd)}kt (${driftKt>0?'+':''}${driftKt}kt) before the next instruction`});
+      } else if(worstPreCompliance){
+        const peakDiff = Math.round(worstPreCompliance.spd - targetKt);
+        const status = Math.abs(peakDiff) <= cfg.spdTol*2 ? 'warn' : 'bad';
+        results.push({type:'SPD', status, label:`SPD ${targetLabel} — reached${note}, peaked at ${Math.round(worstPreCompliance.spd)}kt (${peakDiff>0?'+':''}${peakDiff}kt) before complying`});
       } else {
         // Added 2026-09-08, same visual-consistency reasoning as HDG/ALT's
         // reached-cleanly branches above.
@@ -4135,14 +4304,6 @@ function recompute(){
     if(!reading) return; // no state to read - omit the trio entirely rather than render a broken cell
     if(ex.lineIndex < preLiftoffEndLineIndex) return; // still on the ground pre-departure - no trio yet
 
-    // "Own axis addressed" is about the clearance STRUCTURALLY naming the
-    // axis, independent of whether that particular clearance is trackable
-    // (an untrackable ALT clearance like viaProcedure still "addresses"
-    // ALT - it just produces no ALT trio at all, and doesn't promote a
-    // separately-open HDG/SPD into relevance via the no-own-axis fallback
-    // below).
-    const hasOwnAxis = !!ex.clearance.altitude || !!ex.clearance.heading || !!ex.clearance.speed;
-
     const worstStatusFor = axisType => {
       const rs = ex.eval.results.filter(r=>r.type===axisType);
       if(rs.some(r=>r.status==='bad')) return 'bad';
@@ -4179,30 +4340,29 @@ function recompute(){
     if(openSpd) candidates.push({axisType:'SPD', open:openSpd, own: !!ex.clearance.speed, trio: makeTrio('Speed','SPD', reading.spd, openSpd, fmtKt, cfgv.spdTol)});
     if(!candidates.length) return;
 
-    // Relevance split: own-axis cards show every axis they address in the
-    // head; a card with no clearance of its own (request/goAround/
-    // readyForDescent, or a plain non-clearance ATC line) treats the single
-    // most-recently-assigned open axis as relevant instead, tiebreaking on
-    // equal lineIndex by fixed ALT>HDG>SPD priority - both per
-    // Design Docs/atc-debugger-timeline-cards.md's Relevance split section.
-    let relevantAxes;
-    if(hasOwnAxis){
-      relevantAxes = new Set(candidates.filter(c=>c.own).map(c=>c.axisType));
-    } else {
-      const priority = {ALT:0, HDG:1, SPD:2};
-      let best = candidates[0];
-      for(const c of candidates){
-        if(c.open.assignedAtLineIndex > best.open.assignedAtLineIndex ||
-           (c.open.assignedAtLineIndex === best.open.assignedAtLineIndex && priority[c.axisType] < priority[best.axisType])){
-          best = c;
-        }
-      }
-      relevantAxes = new Set([best.axisType]);
-    }
-
+    // Every currently-open axis renders its tape directly in the
+    // always-visible head, stacked the same way the pre-existing
+    // two-own-axes case already did ("turn right, heading 235, climb
+    // maintain FL230") - retired the old relevance split (own-axis-in-head
+    // vs. single-most-recent-axis-in-head vs. everything-else-in-toggle)
+    // per direct user feedback: an axis BeyondATC is actively tracking
+    // right now belongs on the main card, not hidden behind a click just
+    // because this particular instruction isn't the one that assigned it.
+    // ex.otherTrios stays permanently empty (kept, rather than removed
+    // outright, so trioGroupHtml's existing toggle-section call site and
+    // the coveredAxes Set below don't need their own separate rewrite) -
+    // every trio a card has now lives in ex.trios.
     candidates.forEach(c=>{
-      if(relevantAxes.has(c.axisType)) ex.trios.push({...c.trio, status: worstStatusFor(c.axisType)});
-      else ex.otherTrios.push({...c.trio, status:''}); // neutral - never colored green, it wasn't checked on this card
+      // A relevant trio is only a real verdict when it's this card's OWN
+      // clearance addressing the axis (c.own) - per Design Docs/
+      // atc-debugger-timeline-cards.md's "Trio status color" section, a
+      // carried-forward trio (still open from an earlier instruction, not
+      // this card's own) has nothing checked on THIS exchange to color by.
+      // worstStatusFor found nothing to look at and silently defaulted to
+      // 'ok', which read as a false "still compliant" green on cards
+      // arbitrarily far past a target the aircraft was already busting -
+      // neutral styling instead of a default-'ok' false-green verdict.
+      ex.trios.push({...c.trio, status: c.own ? worstStatusFor(c.axisType) : ''});
     });
   });
 
@@ -4673,7 +4833,12 @@ function loadLeg(idx){
     const rwyLabel = assignedApproach.runway
       ? `rwy ${assignedApproach.runway}${reassigned ? ` (reassigned from rwy ${assignedProc.star.runway})` : ''}`
       : '';
-    procParts.push(`Cleared: ${kindLabel}${rwyLabel ? ' '+rwyLabel : ''}`);
+    // No formal "cleared ... approach" was ever parsed (bare "cleared to
+    // land" only) - see deriveExpectedApproachKind for why that can happen
+    // on a real flight, and why this is display-only, not a clearance claim.
+    const expectedKind = !assignedApproach.kind ? deriveExpectedApproachKind(EXCHANGES) : null;
+    const expectedNote = expectedKind ? ` (${expectedKind.kind} approach expected)` : '';
+    procParts.push(`Cleared: ${kindLabel}${rwyLabel ? ' '+rwyLabel : ''}${expectedNote}`);
   }
   if(procParts.length){
     procNote.style.display = 'block';
