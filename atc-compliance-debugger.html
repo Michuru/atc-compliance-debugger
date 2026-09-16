@@ -5,42 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BeyondATC Compliance Debugger</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
 
+/* Visual-identity redesign, "Amber Terminal" (Design Docs/atc-debugger-visual-identity.md,
+   2026-09-15) - a single warm amber-on-near-black vintage-instrument look, replacing the
+   original green/amber "radar scope." --green/--amber/--red keep their existing names (every
+   verdict call site throughout this file already references them) but are retuned hexes; the
+   real fix for their old double-duty problem is --accent, a genuinely separate brand/chrome
+   color that never means a verdict. --ref/--ref-2/--target replace --blue/--purple/--magenta
+   respectively, deliberately staying cool rather than warm - the one intentional contrast against
+   the ambient amber world, since they represent instrument readings/targets, not verdicts or
+   chrome. --marker-dim is a decoration-only value, never applied to real text (see the retired
+   --text-dimmer below). */
 :root{
   color-scheme: dark;
-  --bg:#080c0d;
-  --panel:#0e1517;
-  --panel-2:#121b1e;
-  --line:#1e2b2e;
-  --text:#d6ece5;
-  --text-dim:#7d9691;
-  --text-dimmer:#4d605d;
-  --green:#3ddc91;
-  --green-dim:#1d4d38;
-  --amber:#ffb648;
-  --amber-dim:#5a4620;
-  --red:#ff5c6c;
+  --bg:#0c0a06;
+  --panel:#171208;
+  --panel-2:#1f1810;
+  --line:#3a2f18;
+  --text:#ede4d0;
+  --text-dim:#9c8a72;
+  --marker-dim:#4a4030;
+  --accent:#e0a940;
+  --accent-dim:#5a4420;
+  --green:#6bcf7f;
+  --green-dim:#254d2c;
+  --amber:#ff9d3d;
+  --amber-dim:#5a3a18;
+  --red:#ff6b5c;
   --red-dim:#5a2530;
-  --blue:#5ec8ff;
-  --purple:#b48bff;
-  --magenta:#ff36d1;
-  --gray:#5c716d;
-  --sweep: rgba(61,220,145,0.06);
+  --ref:#7fb8d9;
+  --ref-2:#c9a6d9;
+  --target:#e0729c;
+  --gray:#5c6355;
 }
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0;}
 body{
   background:
-    radial-gradient(ellipse at 20% -10%, rgba(61,220,145,0.05), transparent 55%),
-    radial-gradient(ellipse at 90% 0%, rgba(94,200,255,0.04), transparent 50%),
+    radial-gradient(ellipse at 20% -10%, rgba(224,169,64,0.05), transparent 55%),
+    radial-gradient(ellipse at 90% 0%, rgba(127,184,217,0.04), transparent 50%),
     var(--bg);
   color:var(--text);
-  font-family:'JetBrains Mono', ui-monospace, monospace;
+  font-family:'IBM Plex Mono', ui-monospace, monospace;
   min-height:100vh;
 }
-h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
-::selection{background:var(--green-dim);color:#fff;}
+h1,h2,h3,.display{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:700;}
+::selection{background:var(--accent-dim);color:#fff;}
+/* Every interactive element here was relying entirely on the browser's
+   unthemed default outline (design review, 2026-09-15) - a stock blue ring
+   is a visible mismatch against this tool's amber-terminal palette. */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 
 /* ---------- Upload screen ---------- */
 #dropzone{
@@ -52,22 +67,32 @@ h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
   padding:40px 20px;
   text-align:center;
 }
+/* Gauge-needle sweep (Design Docs/atc-debugger-visual-identity.md, task 7) - replaces the
+   original continuous-rotation radar sweep, a mismatch once the identity moved to a vintage
+   analog-instrument metaphor. A needle oscillates across an arc like a real VOR/ADF gauge
+   settling, rather than spinning a full circle like an airport radar scope; solid-colored with a
+   small round pivot dot at center, not a fading gradient tail. */
 #dropzone .scope{
   width:120px;height:120px;border-radius:50%;
-  border:2px solid var(--green-dim);
+  border:2px solid var(--accent-dim);
   position:relative;margin-bottom:28px;
   display:flex;align-items:center;justify-content:center;
 }
 #dropzone .scope::before{
-  content:'';position:absolute;inset:18px;border-radius:50%;border:1px solid var(--green-dim);
+  content:'';position:absolute;inset:18px;border-radius:50%;border:1px solid var(--accent-dim);
 }
 #dropzone .scope::after{
-  content:'';position:absolute;width:2px;height:60px;background:linear-gradient(var(--green),transparent);
-  top:0;left:calc(50% - 1px);transform-origin:bottom center;
-  animation:sweep 3s linear infinite;
+  content:'';position:absolute;width:3px;height:52px;background:var(--accent);border-radius:2px;
+  top:8px;left:calc(50% - 1.5px);transform-origin:bottom center;
+  animation:needleSweep 2.6s ease-in-out infinite;
 }
-@keyframes sweep{ to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce){ #dropzone .scope::after{ animation:none; } }
+#dropzone .scope .pivot{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:8px;height:8px;border-radius:50%;background:var(--accent);
+  box-shadow:0 0 0 2px var(--bg);
+}
+@keyframes needleSweep{ 0%,100%{ transform: rotate(-32deg); } 50%{ transform: rotate(32deg); } }
+@media (prefers-reduced-motion: reduce){ #dropzone .scope::after{ animation:none; transform:rotate(0deg); } }
 #dropzone h1{font-size:28px;letter-spacing:0.5px;margin:0 0 8px;}
 #dropzone p{color:var(--text-dim);max-width:480px;line-height:1.6;margin:0 0 28px;font-size:14px;}
 .dropbox{
@@ -79,10 +104,10 @@ h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
   background:var(--panel);
 }
 .dropbox:hover, .dropbox.drag{
-  border-color:var(--green);
+  border-color:var(--accent);
   background:var(--panel-2);
 }
-.dropbox .hint{color:var(--text-dimmer);font-size:12px;margin-top:10px;}
+.dropbox .hint{color:var(--text-dim);font-size:12px;margin-top:10px;}
 .dropbox .big{font-size:15px;color:var(--text);}
 #fileInput{display:none;}
 #parseError{color:var(--red);margin-top:16px;font-size:13px;max-width:480px;}
@@ -91,22 +116,22 @@ h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
 #app{display:none;min-height:100vh;}
 header.topbar{
   position:sticky;top:0;z-index:20;
-  background:rgba(8,12,13,0.92);
+  background:rgba(12,10,6,0.92);
   backdrop-filter:blur(6px);
   border-bottom:1px solid var(--line);
   padding:14px 24px;
 }
 .topbar-row{display:flex;align-items:center;gap:24px;flex-wrap:wrap;}
-.callsign{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:20px;letter-spacing:0.5px;}
-.callsign .dot{color:var(--green);}
+.callsign{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:700;font-size:20px;letter-spacing:0.5px;}
+.callsign .dot{color:var(--accent);}
 .route{color:var(--text-dim);font-size:13px;}
 .route b{color:var(--text);}
 .route-actions{margin-top:6px;font-size:12px;display:flex;gap:16px;align-items:center;}
-.route-actions a,.route-actions .route-copy-btn{color:var(--blue);text-decoration:underline;cursor:pointer;background:none;border:none;font:inherit;padding:0;}
+.route-actions a,.route-actions .route-copy-btn{color:var(--ref);text-decoration:underline;cursor:pointer;background:none;border:none;font:inherit;padding:0;}
 .route-actions a:hover,.route-actions .route-copy-btn:hover{color:var(--text);}
 .statgrid{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap;}
 .stat{text-align:right;}
-.stat .n{font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:700;line-height:1;}
+.stat .n{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:20px;font-weight:700;line-height:1;}
 .stat .l{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.8px;margin-top:2px;}
 .stat.ok .n{color:var(--green);}
 .stat.warn .n{color:var(--amber);}
@@ -137,18 +162,18 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
   width:80px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
   border-radius:5px;padding:6px 8px;font-family:inherit;font-size:13px;
 }
-.cfg-item span.unit{color:var(--text-dimmer);font-size:11px;}
+.cfg-item span.unit{color:var(--text-dim);font-size:11px;}
 .cat-note{color:var(--text-dim);font-size:11.5px;margin-bottom:10px;}
-.cat-note-inline{font-size:11.5px;color:var(--amber);margin-top:6px;}
-.cat-note-inline .link{text-decoration:underline;cursor:pointer;margin-left:6px;color:var(--amber);background:none;border:none;font:inherit;padding:0;}
+.cat-note-inline{font-size:11.5px;color:var(--accent);margin-top:6px;}
+.cat-note-inline .link{text-decoration:underline;cursor:pointer;margin-left:6px;color:var(--accent);background:none;border:none;font:inherit;padding:0;}
 .cat-note-inline .link:hover{color:var(--text);}
 .header-disclaimer{font-size:11px;color:var(--text-dim);margin-top:6px;max-width:520px;}
 .cat-table-wrap{overflow-x:auto;}
 .cat-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap;}
-.cat-table th{text-align:left;color:var(--text-dimmer);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;padding:6px 12px 6px 0;border-bottom:1px solid var(--line);}
+.cat-table th{text-align:left;color:var(--text-dim);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:0.5px;padding:6px 12px 6px 0;border-bottom:1px solid var(--line);}
 .cat-table td{padding:7px 12px 7px 0;border-bottom:1px dotted var(--line);color:var(--text-dim);}
 .cat-table td.examples{color:var(--text-dim);font-size:11px;white-space:normal;min-width:220px;}
-.cat-table tr.current{background:rgba(61,220,145,0.06);}
+.cat-table tr.current{background:rgba(224,169,64,0.06);}
 .cat-table tr.current td{color:var(--text);}
 
 /* chart */
@@ -160,6 +185,11 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 #chartWrap svg{display:block;}
 .legend{display:flex;gap:16px;font-size:11px;color:var(--text-dim);margin-top:6px;flex-wrap:wrap;}
 .legend .sw{display:inline-block;width:10px;height:2px;margin-right:5px;vertical-align:middle;}
+/* 4-dot verdict cluster for the chart's "Instruction marker" legend entry - drawChart already
+   colors each marker by that exchange's own verdict (ok/warn/bad/none); the legend previously
+   claimed a single fixed color, which never matched (design review, 2026-09-15, finding 3). */
+.legend .sw-cluster{display:inline-flex;gap:2px;margin-right:5px;vertical-align:middle;}
+.legend .sw-dot{display:inline-block;width:6px;height:6px;border-radius:50%;}
 
 /* filter bar */
 .filterbar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
@@ -168,16 +198,16 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
   border-radius:20px;padding:6px 14px;font-size:12px;cursor:pointer;user-select:none;
   font-family:inherit;
 }
-.pill.active{background:var(--green-dim);border-color:var(--green);color:var(--green);}
-.pill .cnt{color:var(--text-dimmer);margin-left:4px;}
-.pill.active .cnt{color:var(--green);}
-#legPicker{padding:10px 14px;background:var(--panel-2);border:1px solid var(--amber-dim);border-radius:8px;}
-#legPicker .leg-label{color:var(--amber);font-size:12px;margin-right:4px;}
+.pill.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);}
+.pill .cnt{color:var(--text-dim);margin-left:4px;}
+.pill.active .cnt{color:var(--accent);}
+#legPicker{padding:10px 14px;background:var(--panel-2);border:1px solid var(--accent-dim);border-radius:8px;}
+#legPicker .leg-label{color:var(--accent);font-size:12px;margin-right:4px;}
 #searchBox{
   margin-left:auto;background:var(--panel);border:1px solid var(--line);color:var(--text);
   border-radius:20px;padding:7px 14px;font-family:inherit;font-size:12px;min-width:200px;
 }
-#searchBox::placeholder{color:var(--text-dimmer);}
+#searchBox::placeholder{color:var(--text-dim);}
 
 /* strips */
 .strip{
@@ -200,26 +230,32 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .strip-instr{font-size:13.5px;color:var(--text);line-height:1.4;}
 .strip-instr .who{color:var(--text-dim);font-size:10px;text-transform:uppercase;letter-spacing:0.6px;margin-right:8px;}
 .strip-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;}
+/* A genuine sibling row above .strip-head (not nested inside it - that
+   made it an interactive control inside another interactive control,
+   ambiguous to screen readers and a duplicate tab stop). A real <button>,
+   not a role="button" div, so it needs no extra ARIA of its own. */
+.corrects-note{display:block;width:100%;background:none;border:none;text-align:left;font:inherit;cursor:pointer;color:var(--text-dim);font-size:11px;padding:8px 16px 0 16px;}
+.readback.missing{color:var(--red);}
+.readback.missing-expected{color:var(--text-dim);}
 .badge{
   font-size:10.5px;padding:3px 8px;border-radius:4px;display:inline-flex;align-items:center;gap:4px;
   border:1px solid var(--line);color:var(--text-dim);white-space:nowrap;
 }
-.badge.ok{border-color:var(--green-dim);color:var(--green);background:rgba(61,220,145,0.06);}
-.badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,182,72,0.06);}
-.badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,92,108,0.08);}
-.badge.freq{border-color:rgba(94,200,255,0.35);color:var(--blue);background:rgba(94,200,255,0.06);}
+.badge.ok{border-color:var(--green-dim);color:var(--green);background:rgba(107,207,127,0.06);}
+.badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,157,61,0.06);}
+.badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,107,92,0.08);}
+.badge.freq{border-color:rgba(127,184,217,0.35);color:var(--ref);background:rgba(127,184,217,0.06);}
 .badge.flag{border-style:dashed;}
 /* VFR dynamic state readout - a continuous readout, not a pass/fail/info
    flag, so styled as plain text rather than a .badge pill. See
    Design Docs/vfr-dynamic-flight-state-display.md. */
-.state-readout{margin-top:7px;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--green);font-variant-numeric:tabular-nums;}
-.state-readout span{color:var(--text-dimmer);margin-right:2px;}
+.state-readout{margin-top:7px;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--ref);font-variant-numeric:tabular-nums;}
+.state-readout span{color:var(--text-dim);margin-right:2px;}
 /* VFR location display - distance/bearing text + abstract offline
    dot-sketch. See Design Docs/vfr-location-display.md. */
 .locline{margin-top:7px;padding:7px 9px;background:var(--panel-2);border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--text);}
-.mini-sketch{margin-top:7px;height:80px;border:1px dashed var(--line);border-radius:4px;position:relative;background:var(--panel-2);}
+.mini-sketch{margin-top:7px;aspect-ratio:400/110;border:1px dashed var(--line);border-radius:4px;position:relative;background:var(--panel-2);}
 .mini-sketch svg{position:absolute;inset:0;width:100%;height:100%;}
-.mini-sketch-label{position:absolute;bottom:4px;right:6px;font-size:9px;color:var(--text-dim);}
 .trio-group{display:block;}
 .trio-axis-label{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-top:8px;}
 .carryover-note{font-size:11.5px;color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin-top:8px;}
@@ -233,7 +269,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .state-strip.ok .state-cell:last-child .val{color:var(--green);}
 .state-strip.warn .state-cell:last-child .val{color:var(--amber);}
 .state-strip.bad .state-cell:last-child .val{color:var(--red);}
-.strip-chevron{color:var(--text-dimmer);font-size:12px;flex-shrink:0;transition:transform .15s;}
+.strip-chevron{color:var(--text-dim);font-size:12px;flex-shrink:0;transition:transform .15s;}
 .strip.open .strip-chevron{transform:rotate(90deg);}
 .strip-detail{display:none;padding:0 16px 16px 16px;border-top:1px solid var(--line);margin-top:0;}
 .strip.open .strip-detail{display:block;}
@@ -257,7 +293,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 <body>
 
 <div id="dropzone">
-  <div class="scope"></div>
+  <div class="scope"><div class="pivot" aria-hidden="true"></div></div>
   <h1>BeyondATC Compliance Debugger</h1>
   <p>Drop a Player log file (.log / .txt) to see every ATC instruction paired with what the aircraft actually did &mdash; heading, altitude, and speed compliance, flagged automatically.</p>
   <label class="dropbox" id="dropbox">
@@ -281,7 +317,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
         <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hRegionNote" style="display:none;"></div>
-        <div class="header-disclaimer">Every number in this tool comes from a logged radio-activity sample, not continuous real-time tracking — gaps of a minute or more between values are normal.</div>
+        <div class="header-disclaimer">Every number in this tool comes from a logged radio-activity sample, not continuous real-time tracking — gaps of a minute or more between values are normal. Any position sketch shown below is an abstract projection, not a real map — no terrain or streets.</div>
       </div>
       <div class="statgrid" id="hStats"></div>
       <button class="ghost" id="btnConfig">⚙︎ Thresholds</button>
@@ -303,9 +339,9 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
       <h3>Flight profile</h3>
       <div id="chartHost"></div>
       <div class="legend">
-        <span><span class="sw" style="background:var(--purple)"></span>Altitude (ft)</span>
-        <span><span class="sw" style="background:var(--blue)"></span>Speed (kt IAS)</span>
-        <span><span class="sw" style="background:var(--amber)"></span>Instruction marker (click to jump)</span>
+        <span><span class="sw" style="background:var(--ref-2)"></span>Altitude (ft)</span>
+        <span><span class="sw" style="background:var(--ref)"></span>Speed (kt IAS)</span>
+        <span><span class="sw-cluster" aria-hidden="true"><span class="sw-dot" style="background:var(--green)"></span><span class="sw-dot" style="background:var(--amber)"></span><span class="sw-dot" style="background:var(--red)"></span><span class="sw-dot" style="background:var(--gray)"></span></span>Instruction marker (colored by outcome &mdash; click to jump)</span>
       </div>
     </div>
 
@@ -1739,6 +1775,24 @@ function buildExchanges(parsed){
   // position, not the original atcEvents-only ordering.
   exchanges.sort((a,b) => a.lineIndex - b.lineIndex);
   exchanges.forEach((ex,i) => ex.id = i);
+
+  // A "Negative, ..." ATC correction renders as its own card with "No
+  // readback captured (none expected)," reading as an orphaned rebuke with
+  // no visible link to what it's actually correcting (user-reported
+  // screenshot against Player 9-13 2.log). Link it back to the immediately
+  // preceding exchange's readback, when that exchange has one - deliberately
+  // only the literal previous exchange, not a backward search, since that's
+  // how this correction actually reads in a real log (the very next ATC
+  // line after the readback it's rejecting). Presentation only; doesn't
+  // affect any compliance verdict.
+  for(let i=1;i<exchanges.length;i++){
+    const ex = exchanges[i];
+    if(ex.atc.speaker==='ATC' && /^negative\b/i.test(ex.atc.text.trim())){
+      const prev = exchanges[i-1];
+      if(prev.readback) ex.correctsExchangeId = prev.id;
+    }
+  }
+
   return exchanges;
 }
 
@@ -2461,7 +2515,7 @@ function evaluateExchange(ex, cfg){
         // inbound to SURYP - lastFix never once showed SURYP - so its flat
         // ~176° the whole time is just the aircraft still flying its
         // approach course, not evidence it ignored the clearance).
-        const spreadWin = hdgWin.filter(s => s.lineIndex >= hdgProgressStart.lineIndex);
+        const spreadWin = hdgProgressStart ? hdgWin.filter(s => s.lineIndex >= hdgProgressStart.lineIndex) : hdgWin;
         const hdgSpread = spreadWin.length ? Math.max(...spreadWin.map(s=>headingDiff(s.hdg, spreadWin[0].hdg))) : 0;
         // >=2 samples alone isn't enough - they also need to span real
         // elapsed time, or a clearance superseded a sample later within the
@@ -3093,8 +3147,62 @@ function evaluateExchange(ex, cfg){
       if(dt<=0) continue;
       const vs = (vsWin[i].alt - vsWin[i-1].alt) / dt;
       const pastTopOfClimb = cfg.topOfClimbLineIndex==null || vsWin[i].lineIndex > cfg.topOfClimbLineIndex;
-      const onFinalApproach = pastTopOfClimb && vsWin[i].alt < approachAltAbs;
-      if(onFinalApproach){
+      // onFinalApproach used to gate on position alone (past top of climb +
+      // below the approach gate), an if/else-if with the enroute check right
+      // below - so a CLIMBING sample in this band (a go-around, or the whole
+      // initial departure climb when topOfClimbLineIndex is null because
+      // cruise was never reached) entered this branch, couldn't update the
+      // descent-only mostNegativeVsFinal tracker, and because of the
+      // else-if never reached the enroute countUp/worstUp tracking either -
+      // graded by neither check. This branch is genuinely descent-only by
+      // design (a go-around climb-out through the same altitude band isn't
+      // an approach sink-rate violation), so a climbing sample here falls
+      // through to the enroute check below instead of being silently
+      // dropped (fixed 2026-09-14, commit 3da6a12).
+      //
+      // Residual case that fix left open: when cfg.topOfClimbLineIndex is
+      // null, pastTopOfClimb still defaults true for the WHOLE flight, so a
+      // DESCENDING sample below approachAltAbs still looked like final
+      // approach even when it wasn't - a transient dip (a low pattern
+      // excursion, a step-down before ever reaching cruise), not a real
+      // final descent to landing. Proof it isn't real final approach: the
+      // aircraft climbs back ABOVE approachAltAbs again later in this same
+      // clearance window - so the fix here looks forward across the rest
+      // of vsWin for exactly that, and reclassifies as non-final (falling
+      // through to the same enroute check a climbing sample already uses)
+      // whenever it finds one. Found via 3 independent AI code reviews in
+      // local-slm-evaluation-program.md's Thread 2a; confirmed and
+      // narrowed (not fully closed - see the two caveats below) via a
+      // local-model-delegation pilot, same program, 2026-09-14 (BACKLOG.md).
+      //
+      // Deliberately gated to the topOfClimbLineIndex==null case only - NOT
+      // applied whenever pastTopOfClimb is true for any reason. When
+      // topOfClimbLineIndex is a real, confirmed line index (cruise
+      // actually reached), positional "below approachAltAbs" is already
+      // trustworthy final-approach evidence on its own; forward-scanning
+      // there too would let a genuine excessive-sink-rate approach
+      // violation get retroactively downgraded to the loose enroute
+      // threshold by a LATER go-around/missed-approach climb in the same
+      // still-open clearance window - a real violation that happened
+      // doesn't stop being one just because the aircraft went around
+      // afterward. An independent code-reviewer pass caught this exact
+      // scope risk before this landed (2026-09-15).
+      //
+      // Still open, not fixed here: if the transient dip is the LAST
+      // dt<=1 sample in vsWin (the window closes right there - log ends,
+      // or a new altitude clearance supersedes this one - before any
+      // recovery climb is ever logged), there is no later sample to prove
+      // non-finality with, and this sample still misclassifies as final
+      // approach. Narrower than before this fix (only the no-recovery-
+      // ever-logged shape remains, not every null-topOfClimbLineIndex
+      // descent), but real - kept open in BACKLOG.md.
+      let onFinalApproach = pastTopOfClimb && vsWin[i].alt < approachAltAbs;
+      if(onFinalApproach && cfg.topOfClimbLineIndex == null){
+        for(let j = i + 1; j < vsWin.length; j++){
+          if(vsWin[j].alt >= approachAltAbs){ onFinalApproach = false; break; }
+        }
+      }
+      if(onFinalApproach && vs < 0){
         // A single average across a multi-minute sampling gap isn't
         // reliable evidence of a SUSTAINED excessive sink rate the way it
         // might be for the far more generously-thresholded enroute check
@@ -4878,14 +4986,19 @@ function statusIcon(status){
 }
 
 // Mini compass for a missed (or still-in-progress carryover) heading:
-// magenta dashed line for the assigned course (matching real GPS/FMS
-// moving-map convention for the selected course), solid status-colored line
-// for where the aircraft actually ended up (or currently sits, for a
-// carryover still turning toward it) - a visual assigned-vs-actual
-// comparison instead of two numbers to mentally diff. status is 'ok' for a
-// carryover still correctly progressing, 'warn'/'bad' for a genuine miss -
-// unlike the linear bar below, no tolerance band is drawn here since a
-// heading has no meaningful "close enough" wedge to shade at this scale.
+// --target dashed line for the assigned course (matching real GPS/FMS
+// moving-map convention for the selected/commanded course - originally
+// magenta, retuned to a cooler muted rose under the 2026-09-15 visual-
+// identity redesign, see Design Docs/atc-debugger-visual-identity.md -
+// kept as its own token, deliberately not merged with --ref, since a
+// commanded target and a current reading are exactly the two values this
+// tool exists to let a user diff), solid status-colored line for where the
+// aircraft actually ended up (or currently sits, for a carryover still
+// turning toward it) - a visual assigned-vs-actual comparison instead of
+// two numbers to mentally diff. status is 'ok' for a carryover still
+// correctly progressing, 'warn'/'bad' for a genuine miss - unlike the
+// linear bar below, no tolerance band is drawn here since a heading has no
+// meaningful "close enough" wedge to shade at this scale.
 function headingCompassSvg({target, actual, status, actualLabel='actual'}){
   const color = status==='bad' ? 'var(--red)' : status==='warn' ? 'var(--amber)' : 'var(--green)';
   const cx=40, cy=40, r=30;
@@ -4898,13 +5011,13 @@ function headingCompassSvg({target, actual, status, actualLabel='actual'}){
   return `<div class="mini-diagram">
     <svg width="80" height="80" viewBox="0 0 80 80">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="1.5"/>
-      <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dimmer)">N</text>
-      <line x1="${cx}" y1="${cy}" x2="${tx}" y2="${ty}" stroke="var(--magenta)" stroke-width="2" stroke-dasharray="3,2"/>
+      <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dim)">N</text>
+      <line x1="${cx}" y1="${cy}" x2="${tx}" y2="${ty}" stroke="var(--target)" stroke-width="2" stroke-dasharray="3,2"/>
       <line x1="${cx}" y1="${cy}" x2="${ax}" y2="${ay}" stroke="${color}" stroke-width="2.5"/>
       <circle cx="${cx}" cy="${cy}" r="1.6" fill="var(--text)"/>
     </svg>
     <div class="mini-diagram-legend">
-      <span style="color:var(--magenta)">┄ assigned ${target}°</span>
+      <span style="color:var(--target)">┄ assigned ${target}°</span>
       <span style="color:${color}">━ ${actualLabel} ${actual}°</span>
     </div>
   </div>`;
@@ -4953,16 +5066,15 @@ function miniSketchSvg(departure, destination, current){
   // intentional. See Design Docs/vfr-location-display.md's follow-up note.
   const lineEnd = dest || cur;
   const lineHtml = `<line x1="${dep.x.toFixed(1)}" y1="${dep.y.toFixed(1)}" x2="${lineEnd.x.toFixed(1)}" y2="${lineEnd.y.toFixed(1)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="4 3"/>`;
-  const destDotHtml = dest ? `<circle cx="${dest.x.toFixed(1)}" cy="${dest.y.toFixed(1)}" r="4" fill="var(--text-dimmer)"/>` : '';
+  const destDotHtml = dest ? `<circle cx="${dest.x.toFixed(1)}" cy="${dest.y.toFixed(1)}" r="4" fill="var(--marker-dim)"/>` : '';
 
   return `<div class="mini-sketch">
     <svg viewBox="0 0 ${SKETCH_W} ${SKETCH_H}" preserveAspectRatio="none">
       ${lineHtml}
-      <circle cx="${dep.x.toFixed(1)}" cy="${dep.y.toFixed(1)}" r="4" fill="var(--text-dimmer)"/>
+      <circle cx="${dep.x.toFixed(1)}" cy="${dep.y.toFixed(1)}" r="4" fill="var(--marker-dim)"/>
       ${destDotHtml}
-      <circle cx="${cur.x.toFixed(1)}" cy="${cur.y.toFixed(1)}" r="5" fill="var(--green)"/>
+      <circle cx="${cur.x.toFixed(1)}" cy="${cur.y.toFixed(1)}" r="5" fill="var(--ref)"/>
     </svg>
-    <div class="mini-sketch-label">abstract sketch, no real terrain/streets</div>
   </div>`;
 }
 
@@ -5068,6 +5180,7 @@ function renderStrip(ex){
   const div = document.createElement('div');
   div.className = 'strip '+cls;
   div.innerHTML = `
+    ${ex.correctsExchangeId!=null ? `<button type="button" class="corrects-note" data-ex="${ex.correctsExchangeId}">↩︎ Correcting the readback above — jump to it</button>` : ''}
     <div class="strip-head" role="button" tabindex="0" aria-expanded="false">
       <div class="strip-time">${t}</div>
       <div class="strip-main">
@@ -5089,7 +5202,7 @@ function renderStrip(ex){
              suppressed entirely for isPilotReport self-reports) - only its
              location moved, not what it shows or when. -->
         ${ex.readback ? `<div class="readback"><span class="who">${pilotLabel(ex.readback)}</span>${ex.readback.state ? `<span class="rb-time">${fmtTime(ex.readback.state.timeMin)}</span>` : ''}${escapeHtml(ex.readback.text)}</div>` : (ex.isPilotReport ? '' :
-          (ex.hasTarget ? `<div class="readback" style="color:var(--red)">No readback captured</div>` : `<div class="readback" style="color:var(--text-dimmer)">No readback captured (none expected)</div>`))}
+          (ex.hasTarget ? `<div class="readback missing">No readback captured</div>` : `<div class="readback missing-expected">No readback captured (none expected)</div>`))}
       </div>
       <div class="strip-chevron">▶</div>
     </div>
@@ -5134,6 +5247,26 @@ function renderStrip(ex){
       toggleOpen();
     }
   });
+  // "Correcting the readback above" note - same jump-to-exchange pattern as
+  // the chart's marker click handler (drawChart): reset filters so the full
+  // unfiltered list renders (exId indexes into EXCHANGES, not whatever
+  // subset was showing), then scroll the target card into view and open it.
+  // A real <button>, now a sibling of .strip-head rather than nested inside
+  // it (design review finding 3) - no custom keydown wiring needed, a
+  // native button already fires 'click' on both Enter and Space.
+  const correctsNote = div.querySelector('.corrects-note');
+  if(correctsNote){
+    correctsNote.addEventListener('click', ()=>{
+      const exId = parseInt(correctsNote.dataset.ex);
+      activeFilter='all'; searchTerm=''; document.getElementById('searchBox').value='';
+      buildFilterBar(); renderList();
+      requestAnimationFrame(()=>{
+        const strips = document.querySelectorAll('.strip');
+        const target = strips[exId];
+        if(target){ target.scrollIntoView({behavior:'smooth', block:'center'}); target.classList.add('open'); }
+      });
+    });
+  }
   return div;
 }
 
@@ -5216,7 +5349,7 @@ function render(){
 function drawChart(){
   const host = document.getElementById('chartHost');
   const states = PARSED.states;
-  if(!states.length){ host.innerHTML='<p style="color:var(--text-dimmer)">No PlayerState data found.</p>'; return; }
+  if(!states.length){ host.innerHTML='<p style="color:var(--text-dim)">No PlayerState data found.</p>'; return; }
 
   const W = Math.max(900, states.length*3.2), H = 260, padL=54, padR=54, padT=10, padB=24;
   const maxAlt = Math.max(...states.map(s=>s.alt), 1000)*1.08;
@@ -5245,13 +5378,13 @@ function drawChart(){
 
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="min-width:100%">
     <line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="var(--line)"/>
-    <text x="${padL-8}" y="${padT+8}" fill="var(--purple)" font-size="10" text-anchor="end">${Math.round(maxAlt).toLocaleString()}ft</text>
-    <text x="${padL-8}" y="${H-padB}" fill="var(--purple)" font-size="10" text-anchor="end">0</text>
-    <text x="${W-padR+8}" y="${padT+8}" fill="var(--blue)" font-size="10">${Math.round(maxSpd)}kt</text>
-    <text x="${W-padR+8}" y="${H-padB}" fill="var(--blue)" font-size="10">0</text>
+    <text x="${padL-8}" y="${padT+8}" fill="var(--ref-2)" font-size="10" text-anchor="end">${Math.round(maxAlt).toLocaleString()}ft</text>
+    <text x="${padL-8}" y="${H-padB}" fill="var(--ref-2)" font-size="10" text-anchor="end">0</text>
+    <text x="${W-padR+8}" y="${padT+8}" fill="var(--ref)" font-size="10">${Math.round(maxSpd)}kt</text>
+    <text x="${W-padR+8}" y="${H-padB}" fill="var(--ref)" font-size="10">0</text>
     ${markerEls}
-    <path d="${altPath}" fill="none" stroke="var(--purple)" stroke-width="1.8"/>
-    <path d="${spdPath}" fill="none" stroke="var(--blue)" stroke-width="1.4" opacity="0.85"/>
+    <path d="${altPath}" fill="none" stroke="var(--ref-2)" stroke-width="1.8"/>
+    <path d="${spdPath}" fill="none" stroke="var(--ref)" stroke-width="1.4" opacity="0.85"/>
   </svg>`;
 
   host.querySelectorAll('.marker').forEach(el=>{
