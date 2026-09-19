@@ -1689,6 +1689,61 @@ function buildExchanges(parsed){
     });
   });
 
+  // A bare "Wilco" reply to ATC's "report ready for descent/departure"
+  // prompt acknowledges the instruction but does not itself state
+  // readiness - real-world usage means "understood, will call back when
+  // ready," not "ready now." The self-report filter above only recognizes
+  // the pilot literally saying "ready for descent/departure" (RE_PILOT_SELF_REPORT),
+  // so a Wilco-only reply produced zero visible finding at all - confirmed
+  // against a real log (user-reported) where ATC then cleared the descent
+  // 11 seconds later without ever getting an actual ready call. Surfaced
+  // here as its own informational exchange, anchored at the Wilco reply
+  // itself, so the timeline at least shows the report was acknowledged but
+  // never actually made - deliberately no altitude/window compliance check
+  // (see evaluatePilotReport's 'readyForDescentAckOnly' branch), since a
+  // pilot choosing to report later rather than immediately isn't itself a
+  // violation. Only fires when no real "ready for X" report followed the
+  // same prompt before the next ATC transmission - reuses the same short
+  // lookahead window the main readback search uses elsewhere in this file.
+  events.filter(e => e.speaker==='ATC' && RE_ATC_SELF_REPORT_PROMPT.test(e.text))
+    .forEach(promptEvent => {
+      const gi = events.indexOf(promptEvent);
+      let ackEvent = null;
+      // Only the IMMEDIATE next pilot reply counts as the response to this
+      // specific prompt - breaks after it exactly like the main readback
+      // search above (line ~1503-1513), rather than continuing to scan the
+      // rest of the window. Without this, a later unrelated PILOT line
+      // that happens to also start with "wilco" (answering some other,
+      // later instruction) could get misattributed here instead -
+      // code-reviewer finding, 2026-09-19.
+      for(let j=gi+1;j<events.length && j<=gi+4;j++){
+        if(events[j].speaker==='ATC') break;
+        if(events[j].speaker==='PILOT'){
+          if(RE_PILOT_SELF_REPORT.test(events[j].text)) return; // real report followed - already covered above
+          if(/^wilco\b/i.test(events[j].text.trim())) ackEvent = events[j];
+          break;
+        }
+      }
+      if(!ackEvent) return;
+      exchanges.push({
+        id: null, // reassigned below once the merged array is in final chronological order
+        lineIndex: ackEvent.lineIndex,
+        atc: ackEvent, // same {lineIndex,text,rawVoice,sid,speaker,state} shape renderStrip already expects
+        readback: null,
+        clearance: { altitude:null, heading:null, speed:null, approach:null, landing:null, cancel:{heading:false,altitude:false} },
+        hasTarget: false,
+        windowStates: [], altWindowStates: [], hdgWindowStates: [],
+        altSuperseded:false, altSupersededBy:null, altSupersededByIdx:null,
+        hdgSuperseded:false, hdgSupersededBy:null, hdgSupersededByIdx:null,
+        spdWindowStates:[], spdSuperseded:false, spdSupersededBy:null, spdSupersededByIdx:null,
+        squawkWindowStates:[], squawkSuperseded:false, squawkSupersededBy:null, squawkSupersededByIdx:null,
+        isLast:false,
+        isPilotReport: true,
+        reportKind: 'readyForDescentAckOnly',
+        reportWindowEndLineIndex: Infinity
+      });
+    });
+
   // Player go-around reports ("American 1883, going around.") hit the same
   // RE_PILOT_GOAROUND check in parseLegLines that corrects their SPEAKER
   // attribution (see that regex's own comment: this phrasing leads with the
@@ -1796,11 +1851,26 @@ function buildExchanges(parsed){
   // how this correction actually reads in a real log (the very next ATC
   // line after the readback it's rejecting). Presentation only; doesn't
   // affect any compliance verdict.
+  //
+  // The mirror-image case (user-reported screenshot against
+  // `Player 9-18 4.txt`): the PRECEDING instruction never got a readback at
+  // all (e.g. a frequency-change instruction the pilot didn't immediately
+  // acknowledge) - the "Negative" line itself is what finally prompts the
+  // real reply, which then lands paired with the "Negative" card instead of
+  // the original instruction. Scanning linearly, the original instruction
+  // looks unanswered even though a correct readback did eventually happen.
+  // Carried back onto the original card too (left in place on the
+  // "Negative" card as well, since it genuinely is that card's own paired
+  // reply) - deliberately scoped to !prev.hasTarget so a real compliance-
+  // relevant "no readback" (a heading/altitude/speed/approach clearance
+  // that truly went unanswered) is never silently papered over by an
+  // unrelated later reply.
   for(let i=1;i<exchanges.length;i++){
     const ex = exchanges[i];
     if(ex.atc.speaker==='ATC' && /^negative\b/i.test(ex.atc.text.trim())){
       const prev = exchanges[i-1];
       if(prev.readback) ex.correctsExchangeId = prev.id;
+      else if(ex.readback && !prev.hasTarget && !prev.isPilotReport) prev.readback = ex.readback;
     }
   }
 
@@ -3770,6 +3840,15 @@ function evaluatePilotReport(ex, cfg){
   if(ex.reportKind === 'request'){
     return { results: [{type:'INFO', status:'ok', label:'Player-initiated request'}], overall:'ok' };
   }
+  // Acknowledgment-only reply to a "report ready for descent/departure"
+  // prompt (reportKind: 'readyForDescentAckOnly', see buildExchanges) - a
+  // bare "Wilco" defers the actual report rather than making it. Flagged
+  // 'warn' (not 'ok') so it surfaces in the flagged-only view - not because
+  // the pilot did anything wrong, but because it's worth checking whether
+  // ATC ever actually got the real ready call before authorizing anything.
+  if(ex.reportKind === 'readyForDescentAckOnly'){
+    return { results: [{type:'INFO', status:'warn', label:'Acknowledged ("Wilco") — readiness for descent/departure was never actually reported'}], overall:'warn' };
+  }
   const startAlt = ex.atc.state ? ex.atc.state.alt : null;
   if(startAlt==null || !ex.windowStates.length){
     return { results: [{type:'ALT', status:'ok', label:'Reported ready for descent — no further data to confirm or rule out an early descent'}], overall:'ok' };
@@ -4929,7 +5008,7 @@ function loadLeg(idx){
     // title - same treatment as hCatNote/hFlightNote/hXpdrNote above.
     if(guessedRegion==='unmodeled'){
       regionNote.style.display = 'block';
-      regionNote.innerHTML = `⚠︎ Guessed from ${fromIcao}'s country — BeyondATC's actual region setting isn't logged. Its VFR feature only models US/UK/Australia phraseology, so treat compliance judgments here with extra caution.`;
+      regionNote.innerHTML = `⚠︎ Guessed from ${fromIcao}'s country — BeyondATC's actual region setting isn't logged, and this tool's own compliance rules are modeled on US FAA/JO 7110.65 phraseology (VFR or IFR alike) — so treat compliance judgments here with extra caution.`;
     } else {
       regionNote.style.display = 'none';
       regionNote.innerHTML = '';

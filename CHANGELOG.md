@@ -4,6 +4,15 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.18.0] - 2026-09-19
+
+### Added
+- **A bare "Wilco" reply to ATC's "report ready for descent/departure" now surfaces its own flagged entry**: "Acknowledged ('Wilco') — readiness for descent/departure was never actually reported." Previously this produced no finding at all, since the tool only recognized the pilot literally stating readiness - a real log showed ATC clearing the descent 11 seconds after a bare "Wilco" without ever getting an actual ready call.
+
+### Fixed
+- The "unmodeled region" caution banner said "Its VFR feature only models US/UK/Australia phraseology" even on IFR flights, reading as contradictory - the banner already applies to both VFR and IFR (this tool's whole compliance ruleset is FAA/JO-7110.65-shaped, not VFR-specific), and now says so.
+- A real readback that landed on ATC's own "Negative, ..." correction card - because that's what actually prompted it - no longer leaves the instruction it was really answering showing a misleading "No readback captured (none expected)." The readback now carries back to that original card too.
+
 ## [1.17.0] - 2026-09-16
 
 ### Added
