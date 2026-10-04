@@ -245,6 +245,11 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .badge.warn{border-color:var(--amber-dim);color:var(--amber);background:rgba(255,157,61,0.06);}
 .badge.bad{border-color:var(--red-dim);color:var(--red);background:rgba(255,107,92,0.08);}
 .badge.freq{border-color:rgba(127,184,217,0.35);color:var(--ref);background:rgba(127,184,217,0.06);}
+/* BeyondATC vectoring note: informational, deliberately the same quiet colour as .freq and never a verdict colour. */
+.badge.vec{border-color:rgba(127,184,217,0.35);color:var(--ref);background:rgba(127,184,217,0.06);}
+.vector-detail{margin:10px 0 4px 0;font-size:12.5px;color:var(--ref);}
+.vector-detail h4{margin:0 0 4px 0;}
+.vector-detail ul{margin:0;padding-left:18px;}
 .badge.flag{border-style:dashed;}
 /* VFR dynamic state readout - a continuous readout, not a pass/fail/info
    flag, so styled as plain text rather than a .badge pill. See
@@ -370,6 +375,10 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 const RE_PLAYERSTATE = /\[PlayerState\]\s+\w+\s+(\d{1,2}):(\d{2}),\s*lat:\s*([-\d.]+),\s*lon:\s*([-\d.]+),\s*alt:\s*(-?[\d.]+),\s*hdg:\s*(-?[\d.]+),\s*spd:\s*(-?[\d.]+),\s*gs:\s*(-?[\d.]+),\s*lastFix:\s*([^,]*),\s*currFix:\s*([^,]*),\s*inVector:\s*(True|False),\s*com1:\s*([^,]*),\s*com2:\s*([^,]*),\s*transponder:\s*([^\r\n]*)/;
 const RE_LVI = /\[LocalVoiceInput\]\s+sid=(\d+)\s+ls=([\d.]+)\s*\|\s*"(.*)"/;
 const RE_INSTR = /\[Instruction\]\s(.*)/;
+// BeyondATC's own vectoring-engine notes (Design Docs/atc-debugger-vectoring-telemetry.md).
+// Informational only: parsed into vectorIssues[]/vectoring[] and never fed into any verdict.
+const RE_VECTOR_ISSUE = /\[VectorIssue\]\s*(.*)$/;
+const RE_VECTORING = /\[Vectoring\]\s*callsign=([^|\s]+)\s*(?:\|(.*))?$/;
 const RE_CRUISE = /Initial Cruise Altitude:\s*(\d+)/;
 const RE_SIMBRIEF = /SimBrief flight plan URL:\s*(\S+)/;
 const RE_PLAYER_CALLSIGN = /Player Callsign:\s*(\S+)/;
@@ -830,10 +839,69 @@ function parseLog(text){
   return { legs };
 }
 
+// Splits "a=1 | b=2 | bare" into {kv:{a:'1',b:'2'}, bare:['bare']}.
+function splitVectorFields(str){
+  const kv = {}, bare = [];
+  (str || '').split('|').forEach(part => {
+    const t = part.trim();
+    if(!t) return;
+    const eq = t.indexOf('=');
+    if(eq > 0) kv[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
+    else bare.push(t);
+  });
+  return { kv, bare };
+}
+function numOrNull(v){ const n = parseFloat(v); return Number.isFinite(n) ? n : null; }
+
+// One [VectorIssue] line. Returns null for a line with no reason= (not a real issue). The reason keeps its base
+// token (Replan, TrackDeviation...) separate from any optional suffix such as "(final-intercept)".
+function parseVectorIssueLine(line, lineIndex){
+  const m = line.match(RE_VECTOR_ISSUE);
+  if(!m) return null;
+  const { kv } = splitVectorFields(m[1]);
+  if(kv.reason === undefined) return null;
+  const rm = kv.reason.match(/^(\S+)(?:\s*\((.*)\))?\s*$/);
+  const td = (kv.trackDev || '').match(/^([\d.]+)\/([\d.]+)/);
+  return {
+    lineIndex,
+    reason: rm ? rm[1] : kv.reason,
+    reasonSuffix: rm && rm[2] ? rm[2] : null,
+    cmdTrue: numOrNull(kv.cmdTrue),
+    acTrue: numOrNull(kv.acTrue),
+    turnDeg: numOrNull(kv.turnDeg),
+    trackDevActual: td ? parseFloat(td[1]) : null,
+    trackDevLimit: td ? parseFloat(td[2]) : null,
+    distNm: numOrNull(kv.distNm),
+    xtkM: numOrNull(kv.xtkM),
+    target: kv.target || null
+  };
+}
+
+// One [Vectoring] line: a callsign, then pipe-delimited shapes (nonCompliance=..., a bare "divergence", mode=...).
+// ncKind classifies the nonCompliance text; the em dash in the outer-shell wording is matched by prefix only.
+function parseVectoringLine(line, lineIndex){
+  const m = line.match(RE_VECTORING);
+  if(!m) return null;
+  const { kv, bare } = splitVectorFields(m[2]);
+  const nc = kv.nonCompliance !== undefined ? kv.nonCompliance : null;
+  let ncKind = null;
+  if(nc !== null){
+    ncKind = /^queried/i.test(nc) ? 'queried'
+      : /^HOLD/i.test(nc) ? 'hold'
+      : /^cleared\s*\(compliance resumed/i.test(nc) ? 'resumed'
+      : /^cleared\s*\(outer-shell breach/i.test(nc) ? 'outerShell'
+      : 'other';
+  }
+  const kind = nc !== null ? 'nonCompliance' : bare.includes('divergence') ? 'divergence' : kv.mode !== undefined ? 'mode' : 'other';
+  return { lineIndex, callsign: m[1], kind, nonCompliance: nc, ncKind, mode: kv.mode || null, curr: kv.curr || null, hdgT: numOrNull(kv.hdgT) };
+}
+
 function parseLegLines(lines, startIdx, endIdx){
   let lastState = null, lastLVI = null, lastLVILine = -999, lastPlayerActionLine = -999;
   const states = [];       // all PlayerState samples, chronological
   const events = [];       // all Instruction events (ATC or PILOT)
+  const vectorIssues = []; // BeyondATC's [VectorIssue] lines (informational only)
+  const vectoring = [];    // BeyondATC's [Vectoring] lines (informational only)
   // Message IDs of CPDLC clearances synthesized as real ATC events this leg -
   // a later WILCO ack is only synthesized as this clearance's readback when
   // its own MRN= references one of these, never on From= alone. See
@@ -876,6 +944,17 @@ function parseLegLines(lines, startIdx, endIdx){
         meta.route = u.searchParams.get('route');
         meta.simbriefUrl = m[1];
       }catch(e){}
+      continue;
+    }
+
+    if(line.includes('[VectorIssue]')){
+      const vi = parseVectorIssueLine(line, i);
+      if(vi) vectorIssues.push(vi);
+      continue;
+    }
+    if(line.includes('[Vectoring]')){
+      const vg = parseVectoringLine(line, i);
+      if(vg) vectoring.push(vg);
       continue;
     }
 
@@ -1085,7 +1164,7 @@ function parseLegLines(lines, startIdx, endIdx){
   });
 
   meta.flightRules = findFlightRulesForLeg(lines, startIdx);
-  return { meta, states, events };
+  return { meta, states, events, vectorIssues, vectoring };
 }
 
 /* ============================================================
@@ -4805,12 +4884,108 @@ function initApp(text){
 // evaluated one leg at a time - each leg gets its own callsign, meta, and
 // exchange list, since mixing two unrelated flights' states/events together
 // would misclassify everything and make the chart/exchange list meaningless.
+// BeyondATC's vectoring notes carry no timestamp and no callsign, so they are tied to the timeline by log position.
+// Windows are tuned on the real sample corpus (Design Docs/atc-debugger-vectoring-telemetry.md, "Task 1 result"):
+// a [VectorIssue] sits 4 to 9 lines before the heading card it commands (window 40); a nonCompliance tag is written
+// after the card it judges, up to 100 lines after it (the outer-shell takeover is the late one; window 120).
+const VECTOR_ISSUE_WINDOW = 40;
+const VECTOR_TAG_WINDOW = 120;
+
+// Pure: attaches ex.vector = { issue, engine[] } to the ATC heading cards a leg's vector lines concern, and returns the
+// lines with no card in their window (counted, not shown). Only ATC exchanges are ever targets, never a pilot readback.
+// Informational: it never touches ex.eval, so no verdict, filter or chart colour can move.
+function linkVectors(exchanges, parsed){
+  const unmatched = [];
+  const cards = exchanges
+    .filter(ex => ex.clearance && ex.clearance.heading && ex.atc && ex.atc.speaker === 'ATC')
+    .sort((a, b) => a.lineIndex - b.lineIndex);
+  const slot = ex => ex.vector || (ex.vector = { issue: null, engine: [] });
+  (parsed.vectorIssues || []).forEach(vi => {
+    const card = cards.find(ex => ex.lineIndex > vi.lineIndex);
+    if(!card || card.lineIndex - vi.lineIndex > VECTOR_ISSUE_WINDOW){ unmatched.push({ kind: 'issue', lineIndex: vi.lineIndex, reason: vi.reason }); return; }
+    // Two issues competing for one card: the nearer one is the one that commands it, so it wins and the other is counted.
+    const held = card.vector && card.vector.issue;
+    if(held && held.lineIndex > vi.lineIndex){ unmatched.push({ kind: 'issue', lineIndex: vi.lineIndex, reason: vi.reason }); return; }
+    if(held) unmatched.push({ kind: 'issue', lineIndex: held.lineIndex, reason: held.reason });
+    slot(card).issue = vi;
+  });
+  (parsed.vectoring || []).filter(vg => vg.kind === 'nonCompliance').forEach(vg => {
+    let card = null;
+    for(const ex of cards){ if(ex.lineIndex < vg.lineIndex) card = ex; else break; }
+    if(card && vg.lineIndex - card.lineIndex <= VECTOR_TAG_WINDOW) slot(card).engine.push(vg);
+    else unmatched.push({ kind: 'tag', lineIndex: vg.lineIndex, ncKind: vg.ncKind });
+  });
+  exchanges.forEach(ex => { if(ex.vector) ex.vector.engine.sort((a, b) => a.lineIndex - b.lineIndex); });
+  return unmatched;
+}
+
+// Pure: which badge reasons a card's vector telemetry earns, or null for none. Decided with Don 2026-10-04: only a
+// nonCompliance tag meaning BeyondATC saw the aircraft off its assigned heading (queried, or cleared / outer-shell
+// breach). HOLD and compliance-resumed never badge, and there is no turn-size clause: a large TrackDeviation, TubeAdjust
+// or Replan turn alone stays quiet and only shows in the detail panel.
+function vectorFlag(vector){
+  if(!vector || !vector.engine) return null;
+  const kinds = vector.engine.map(g => g.ncKind);
+  const out = [];
+  if(kinds.includes('queried')) out.push('queried');
+  if(kinds.includes('outerShell')) out.push('outerShell');
+  return out.length ? out : null;
+}
+
+// Plain-wording builders for the vector telemetry shown on a card. Everything is built from parsed fields in the tool's
+// own words, never the raw log line. The result goes through escapeHtml at render time, so a log-derived token (an
+// unknown reason, a suffix) can only ever appear as text.
+const VECTOR_REASON_WORDS = {
+  Initial: 'an initial vector', Replan: 'a re-plan', TrackDeviation: 'a track-deviation correction',
+  TubeAdjust: 'a route-corridor adjustment', CrossTrackDeviation: 'a cross-track correction',
+  SegmentAdvance: 'an advance to the next route segment'
+};
+const VECTOR_BADGE_TEXT = 'BeyondATC saw the aircraft off its heading';
+function vecDeg(n){ return String(Math.round(((n % 360) + 360) % 360)).padStart(3, '0') + '°'; }
+
+// afterDeviation: an earlier card already carried the badge, so a re-plan can be tied back to it in neutral words.
+function vectorDetailLines(vector, afterDeviation){
+  const lines = [];
+  if(!vector) return lines;
+  const vi = vector.issue;
+  if(vi){
+    const base = VECTOR_REASON_WORDS[vi.reason] || vi.reason;
+    const suffix = vi.reasonSuffix ? (vi.reasonSuffix === 'final-intercept' ? ' (final intercept)' : ' (' + vi.reasonSuffix + ')') : '';
+    const bits = [];
+    if(Number.isFinite(vi.cmdTrue)) bits.push('commanded track ' + vecDeg(vi.cmdTrue) + ' true');
+    if(Number.isFinite(vi.acTrue)) bits.push('aircraft track ' + vecDeg(vi.acTrue) + ' true');
+    if(Number.isFinite(vi.turnDeg)) bits.push(Math.abs(Math.round(vi.turnDeg)) + '° turn ' + (vi.turnDeg < 0 ? 'left' : 'right'));
+    lines.push('BeyondATC logged ' + base + suffix + (bits.length ? ': ' + bits.join(', ') : '') + '.');
+    if(vi.reason === 'Replan' && afterDeviation) lines.push('An earlier card in this leg notes that BeyondATC saw the aircraft off its heading.');
+  }
+  (vector.engine || []).forEach(g => {
+    const at = Number.isFinite(g.hdgT) ? ' (aircraft heading ' + vecDeg(g.hdgT) + ' true in its log)' : '';
+    if(g.ncKind === 'queried') lines.push('BeyondATC queried the heading after seeing the aircraft off its assigned heading' + at + '.');
+    else if(g.ncKind === 'outerShell') lines.push('BeyondATC logged an outer-shell breach on this heading and took authority itself' + at + '.');
+    else if(g.ncKind === 'hold') lines.push('BeyondATC suspended routine vectors for this aircraft' + at + '.');
+    else if(g.ncKind === 'resumed') lines.push('BeyondATC cleared its non-compliance flag for this aircraft' + at + '.');
+  });
+  return lines;
+}
+function vectorDetailHtml(vector, afterDeviation){
+  const lines = vectorDetailLines(vector, afterDeviation);
+  if(!lines.length) return '';
+  return `<div class="vector-detail"><h4>BeyondATC's own vectoring notes</h4><ul>${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul></div>`;
+}
+function vectorBadgeHtml(vector){
+  return vectorFlag(vector) ? `<span class="badge vec">ⓘ ${VECTOR_BADGE_TEXT}</span>` : '';
+}
+function vectorAfterDeviation(ex){
+  return EXCHANGES.some(o => o.lineIndex < ex.lineIndex && vectorFlag(o.vector));
+}
+
 function loadLeg(idx){
   currentLegIndex = idx;
   PARSED = ALL_LEGS[idx];
   const callsign = guessCallsign(PARSED.events, PARSED.meta.playerCallsigns);
   refineSpeakersByCallsign(PARSED.events, callsign);
   EXCHANGES = buildExchanges(PARSED);
+  PARSED.vectorUnmatched = linkVectors(EXCHANGES, PARSED);
   CFG = JSON.parse(JSON.stringify(DEFAULT_CFG));
 
   const profile = categoryProfileForType(PARSED.meta.actype);
@@ -5370,6 +5545,9 @@ function renderStrip(ex){
   const isVfr = PARSED.meta.flightRules && PARSED.meta.flightRules.toUpperCase()==='VFR';
   const freq = (isVfr && ex.atc.state) ? parseFreq(ex.atc.state.com1) : null;
   if(freq) badges += `<span class="badge freq">📻︎ ${freq}</span>`;
+  // BeyondATC's own vectoring notes (informational; never part of ex.eval, so no verdict moves).
+  badges += vectorBadgeHtml(ex.vector);
+  const vectorDetail = ex.vector ? vectorDetailHtml(ex.vector, vectorAfterDeviation(ex)) : '';
   // VFR dynamic state readout - nothing on the ground, HDG+ALT airborne,
   // HDG+ALT+SPD once ex.flightPhase (cached in recompute, see flightPhase)
   // says the aircraft is on approach. See
@@ -5453,6 +5631,7 @@ function renderStrip(ex){
     <div class="strip-detail">
       ${ex.atc.rawVoice ? `<div class="rawvoice">🔊︎ "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
       ${diagramsHtml}
+      ${vectorDetail}
       ${locationSketchHtml}
       ${trioGroupHtml(ex.otherTrios, true)}
       <div class="detail-grid">

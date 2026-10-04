@@ -4,6 +4,11 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.19.0] - 2026-10-04
+
+### Added
+- **A "BeyondATC saw the aircraft off its heading" note on heading instructions.** BeyondATC's own log records when it queried an aircraft's heading or took authority after an outer-shell breach; the tool now reads those notes and shows a small neutral badge on the heading instruction they concern, with a plain-wording list of everything BeyondATC logged about that vector in the card's expanded detail. It is information only: no verdict, count, filter or chart colour changes. Its purpose is to let a tester see whether BeyondATC was reacting to the aircraft's own deviation before suspecting the engine.
+
 ## [1.18.0] - 2026-09-19
 
 ### Added
