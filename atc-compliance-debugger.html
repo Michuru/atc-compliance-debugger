@@ -271,6 +271,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .state-cell:last-child{border-right:none;}
 .state-cell .lbl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;}
 .state-cell .val{font-size:14.5px;font-weight:700;color:var(--text);}
+.state-cell .note{font-size:9.5px;color:var(--text-dim);margin-top:2px;font-variant-numeric:tabular-nums;}
 .state-strip.ok .state-cell:last-child .val{color:var(--green);}
 .state-strip.warn .state-cell:last-child .val{color:var(--amber);}
 .state-strip.bad .state-cell:last-child .val{color:var(--red);}
@@ -899,6 +900,7 @@ function parseVectoringLine(line, lineIndex){
 function parseLegLines(lines, startIdx, endIdx){
   let lastState = null, lastLVI = null, lastLVILine = -999, lastPlayerActionLine = -999;
   const states = [];       // all PlayerState samples, chronological
+  let hdgMagFallbacks = 0; // states with no usable position: hdgMag left equal to hdg (expected none)
   const events = [];       // all Instruction events (ATC or PILOT)
   const vectorIssues = []; // BeyondATC's [VectorIssue] lines (informational only)
   const vectoring = [];    // BeyondATC's [Vectoring] lines (informational only)
@@ -964,11 +966,17 @@ function parseLegLines(lines, startIdx, endIdx){
     }
 
     if((m = line.match(RE_PLAYERSTATE))){
+      const stLat = parseFloat(m[3]), stLon = parseFloat(m[4]), stHdg = parseFloat(m[6]);
+      if(!Number.isFinite(stLat) || !Number.isFinite(stLon)) hdgMagFallbacks++;
+      // hdg is the logged heading in TRUE degrees; hdgMag is the same heading
+      // in MAGNETIC degrees (what ATC speaks and the cockpit shows), converted
+      // per state because variation drifts across a leg. See magVariation.
       const st = {
         lineIndex: i,
         timeMin: parseInt(m[1])*60 + parseInt(m[2]),
-        lat: parseFloat(m[3]), lon: parseFloat(m[4]),
-        alt: parseFloat(m[5]), hdg: parseFloat(m[6]),
+        lat: stLat, lon: stLon,
+        alt: parseFloat(m[5]), hdg: stHdg,
+        hdgMag: hdgToMagnetic(stHdg, stLat, stLon),
         spd: parseFloat(m[7]), gs: parseFloat(m[8]),
         lastFix: m[9].trim(), currFix: m[10].trim(),
         inVector: m[11] === 'True',
@@ -1164,6 +1172,7 @@ function parseLegLines(lines, startIdx, endIdx){
   });
 
   meta.flightRules = findFlightRulesForLeg(lines, startIdx);
+  meta.hdgMagFallbacks = hdgMagFallbacks;
   return { meta, states, events, vectorIssues, vectoring };
 }
 
@@ -2125,6 +2134,211 @@ function compassPoint(bearing){
   return COMPASS_POINTS[Math.round(bearing / 45) % 8];
 }
 
+// ---- Magnetic variation (World Magnetic Model 2025) ----
+// Why this exists (Design Docs/atc-debugger-magnetic-variation.md): the log's
+// [PlayerState] hdg is TRUE degrees, while every spoken [Instruction] heading
+// is MAGNETIC, so comparing them directly is wrong by the local variation
+// (up to ~19 deg in the logs seen). Measured 2026-10-09: the model below
+// reproduces BeyondATC's own spoken headings (round5(cmdTrue - D) == spoken)
+// in 172 of 178 real pairs, mean residual +0.04 deg; settled compliant
+// samples land a median 1.0 deg from the spoken heading (78 of 94 within 5 deg; 10.0 deg and 36 of 94 raw; 0.78 deg before the whole-degree rounding).
+// Source: NOAA/NCEI WMM2025.COF (public domain; 90 coefficient rows, 4554
+// bytes, sha256 dfa8597825af4e0b87ff4198a5b4fb661b3c49f4cd090cd0164e0259b075582f),
+// degree 12. NOAA's own 100 published test values are reproduced to 0.005 deg
+// (tests/debugger-regression.html). EXPIRY: the model is valid 2025.0 to
+// 2030.0 and NOAA says it expires on 2029-12-31 - replace the table with the
+// next model before then. The log carries a weekday and time but no year,
+// so callers pass a fixed epoch (MAG_VAR_YEAR); the corpus cannot tell 2024
+// from 2026 and secular change is under 0.15 deg/yr.
+// Terms: variation is positive EAST; magnetic = true - variation.
+// Rows: [n, m, g, h, gDot, hDot] at epoch WMM_EPOCH (nT, nT/yr).
+const WMM_EPOCH = 2025.0;
+const WMM_COEFFS = [
+  [1,0,-29351.8,0,12,0],
+  [1,1,-1410.8,4545.4,9.7,-21.5],
+  [2,0,-2556.6,0,-11.6,0],
+  [2,1,2951.1,-3133.6,-5.2,-27.7],
+  [2,2,1649.3,-815.1,-8,-12.1],
+  [3,0,1361,0,-1.3,0],
+  [3,1,-2404.1,-56.6,-4.2,4],
+  [3,2,1243.8,237.5,0.4,-0.3],
+  [3,3,453.6,-549.5,-15.6,-4.1],
+  [4,0,895,0,-1.6,0],
+  [4,1,799.5,278.6,-2.4,-1.1],
+  [4,2,55.7,-133.9,-6,4.1],
+  [4,3,-281.1,212,5.6,1.6],
+  [4,4,12.1,-375.6,-7,-4.4],
+  [5,0,-233.2,0,0.6,0],
+  [5,1,368.9,45.4,1.4,-0.5],
+  [5,2,187.2,220.2,0,2.2],
+  [5,3,-138.7,-122.9,0.6,0.4],
+  [5,4,-142,43,2.2,1.7],
+  [5,5,20.9,106.1,0.9,1.9],
+  [6,0,64.4,0,-0.2,0],
+  [6,1,63.8,-18.4,-0.4,0.3],
+  [6,2,76.9,16.8,0.9,-1.6],
+  [6,3,-115.7,48.8,1.2,-0.4],
+  [6,4,-40.9,-59.8,-0.9,0.9],
+  [6,5,14.9,10.9,0.3,0.7],
+  [6,6,-60.7,72.7,0.9,0.9],
+  [7,0,79.5,0,-0,0],
+  [7,1,-77,-48.9,-0.1,0.6],
+  [7,2,-8.8,-14.4,-0.1,0.5],
+  [7,3,59.3,-1,0.5,-0.8],
+  [7,4,15.8,23.4,-0.1,0],
+  [7,5,2.5,-7.4,-0.8,-1],
+  [7,6,-11.1,-25.1,-0.8,0.6],
+  [7,7,14.2,-2.3,0.8,-0.2],
+  [8,0,23.2,0,-0.1,0],
+  [8,1,10.8,7.1,0.2,-0.2],
+  [8,2,-17.5,-12.6,0,0.5],
+  [8,3,2,11.4,0.5,-0.4],
+  [8,4,-21.7,-9.7,-0.1,0.4],
+  [8,5,16.9,12.7,0.3,-0.5],
+  [8,6,15,0.7,0.2,-0.6],
+  [8,7,-16.8,-5.2,-0,0.3],
+  [8,8,0.9,3.9,0.2,0.2],
+  [9,0,4.6,0,-0,0],
+  [9,1,7.8,-24.8,-0.1,-0.3],
+  [9,2,3,12.2,0.1,0.3],
+  [9,3,-0.2,8.3,0.3,-0.3],
+  [9,4,-2.5,-3.3,-0.3,0.3],
+  [9,5,-13.1,-5.2,0,0.2],
+  [9,6,2.4,7.2,0.3,-0.1],
+  [9,7,8.6,-0.6,-0.1,-0.2],
+  [9,8,-8.7,0.8,0.1,0.4],
+  [9,9,-12.9,10,-0.1,0.1],
+  [10,0,-1.3,0,0.1,0],
+  [10,1,-6.4,3.3,0,0],
+  [10,2,0.2,0,0.1,-0],
+  [10,3,2,2.4,0.1,-0.2],
+  [10,4,-1,5.3,-0,0.1],
+  [10,5,-0.6,-9.1,-0.3,-0.1],
+  [10,6,-0.9,0.4,0,0.1],
+  [10,7,1.5,-4.2,-0.1,0],
+  [10,8,0.9,-3.8,-0.1,-0.1],
+  [10,9,-2.7,0.9,-0,0.2],
+  [10,10,-3.9,-9.1,-0,-0],
+  [11,0,2.9,0,0,0],
+  [11,1,-1.5,0,-0,-0],
+  [11,2,-2.5,2.9,0,0.1],
+  [11,3,2.4,-0.6,0,-0],
+  [11,4,-0.6,0.2,0,0.1],
+  [11,5,-0.1,0.5,-0.1,-0],
+  [11,6,-0.6,-0.3,0,-0],
+  [11,7,-0.1,-1.2,-0,0.1],
+  [11,8,1.1,-1.7,-0.1,-0],
+  [11,9,-1,-2.9,-0.1,0],
+  [11,10,-0.2,-1.8,-0.1,0],
+  [11,11,2.6,-2.3,-0.1,0],
+  [12,0,-2,0,0,0],
+  [12,1,-0.2,-1.3,0,-0],
+  [12,2,0.3,0.7,-0,0],
+  [12,3,1.2,1,-0,-0.1],
+  [12,4,-1.3,-1.4,-0,0.1],
+  [12,5,0.6,-0,-0,-0],
+  [12,6,0.6,0.6,0.1,-0],
+  [12,7,0.5,-0.1,-0,-0],
+  [12,8,-0.1,0.8,0,0],
+  [12,9,-0.4,0.1,0,-0],
+  [12,10,-0.2,-1,-0.1,-0],
+  [12,11,-1.3,0.1,-0,0],
+  [12,12,-0.7,0.2,-0.1,-0.1]
+];
+
+// Magnetic variation in degrees (east positive) at a WGS84 position, height
+// above the ellipsoid in km and a decimal year (clamped to the model's
+// 2025.0 to 2030.0 range). Geodetic to geocentric conversion, Schmidt
+// semi-normalised Legendre functions, then the standard spherical-harmonic
+// sum; the result is the angle of the horizontal field east of true north.
+function magVariation(latDeg, lonDeg, altKm, year){
+  const A = 6378.137, F = 1/298.257223563, RE = 6371.2;
+  const E2 = F*(2-F);
+  const rad = Math.PI/180;
+  const N = 12;
+  // Pole guard: declination is undefined at the poles and the horizontal
+  // field terms divide by sin(colatitude).
+  const lat = Math.max(-89.9999, Math.min(89.9999, latDeg));
+  const t = Math.max(2025, Math.min(2030, year)) - WMM_EPOCH;
+  const phi = lat*rad, lam = lonDeg*rad;
+  const sphi = Math.sin(phi), cphi = Math.cos(phi);
+  const rc = A/Math.sqrt(1 - E2*sphi*sphi);
+  const pp = (rc + altKm)*cphi;
+  const zz = (rc*(1 - E2) + altKm)*sphi;
+  const r = Math.sqrt(pp*pp + zz*zz);
+  const phiG = Math.asin(zz/r);
+  const ct = Math.sin(phiG); // cos(colatitude)
+  const st = Math.cos(phiG); // sin(colatitude)
+  const P = [], dP = [];
+  for(let n = 0; n <= N; n++){ P.push(new Array(N + 1).fill(0)); dP.push(new Array(N + 1).fill(0)); }
+  P[0][0] = 1;
+  for(let n = 1; n <= N; n++){
+    for(let m = 0; m <= n; m++){
+      if(n === m){
+        const k = n === 1 ? 1 : Math.sqrt((2*n - 1)/(2*n));
+        P[n][n] = k*st*P[n-1][n-1];
+        dP[n][n] = k*(ct*P[n-1][n-1] + st*dP[n-1][n-1]);
+      } else {
+        const d = Math.sqrt(n*n - m*m);
+        const has2 = n - 2 >= m;
+        const e = has2 ? Math.sqrt((n - 1)*(n - 1) - m*m) : 0;
+        const p2 = has2 ? P[n-2][m] : 0;
+        const dp2 = has2 ? dP[n-2][m] : 0;
+        P[n][m] = ((2*n - 1)*ct*P[n-1][m] - e*p2)/d;
+        dP[n][m] = ((2*n - 1)*(ct*dP[n-1][m] - st*P[n-1][m]) - e*dp2)/d;
+      }
+    }
+  }
+  const cm = [], sm = [];
+  for(let m = 0; m <= N; m++){ cm.push(Math.cos(m*lam)); sm.push(Math.sin(m*lam)); }
+  const ar = RE/r;
+  let br = 0, bt = 0, bp = 0;
+  for(const [n, m, g0, h0, gd, hd] of WMM_COEFFS){
+    const g = g0 + t*gd, h = h0 + t*hd;
+    const f = Math.pow(ar, n + 2);
+    const gc = g*cm[m] + h*sm[m];
+    br += f*(n + 1)*gc*P[n][m];
+    bt -= f*gc*dP[n][m];
+    bp += f*m*(g*sm[m] - h*cm[m])*P[n][m];
+  }
+  bp /= st;
+  // Field in the geocentric north/east/down frame, rotated to the geodetic frame.
+  const xg = -bt, yg = bp, zg = -br;
+  const psi = phiG - phi;
+  const x = xg*Math.cos(psi) - zg*Math.sin(psi);
+  const y = yg;
+  return Math.atan2(y, x)/rad;
+}
+
+// Call-site constants: sea level, and a fixed epoch because the log has no year.
+const MAG_VAR_ALT_KM = 0;
+const MAG_VAR_YEAR = 2026.0;
+
+// A logged (true) heading expressed as the magnetic heading the cockpit shows
+// and ATC speaks, rounded to a whole degree like the cockpit readout (raw hdg
+// is always an integer). A missing or non-finite position leaves it unchanged;
+// callers count those so the fallback is visible.
+function hdgToMagnetic(hdgTrue, lat, lon){
+  if(!Number.isFinite(hdgTrue) || !Number.isFinite(lat) || !Number.isFinite(lon)) return hdgTrue;
+  const mag = Math.round(hdgTrue - magVariation(lat, lon, MAG_VAR_ALT_KM, MAG_VAR_YEAR));
+  return ((mag % 360) + 360) % 360;
+}
+
+// Cards quote aircraft headings in MAGNETIC degrees (what ATC spoke), so the
+// log's raw TRUE value can still be found in Player.log: this returns the
+// bracketed raw value to append, or '' when the two numbers are the same.
+function rawHdgSuffix(state){
+  if(!state || !Number.isFinite(state.hdg)) return ''; // raw-hdg-ok
+  const raw = ((Math.round(state.hdg) % 360) + 360) % 360; // raw-hdg-ok
+  return raw === state.hdgMag ? '' : ` (log ${raw}° true)`;
+}
+// The same note for use inside a bracket that already exists ("(17° off, log 90° true)"),
+// so a label never shows two brackets back to back: ", log 90° true" or ''.
+function rawHdgNote(state){
+  const s = rawHdgSuffix(state);
+  return s ? ', ' + s.trim().slice(1, -1) : '';
+}
+
 // First later state where the aircraft has actually left the ground
 // (climbed meaningfully above the altitude it was sitting at).
 function firstAirborneState(states, groundState){
@@ -2542,10 +2756,10 @@ function evaluateExchange(ex, cfg){
       : startState;
     let compliedAt = null;
     for(const s of hdgWin){
-      if(headingDiff(s.hdg, target) <= cfg.hdgTol){ compliedAt = s; break; }
+      if(headingDiff(s.hdgMag, target) <= cfg.hdgTol){ compliedAt = s; break; }
     }
     const finalState = hdgWin.length ? hdgWin[hdgWin.length-1] : startState;
-    const finalDiff = finalState ? headingDiff(finalState.hdg, target) : null;
+    const finalDiff = finalState ? headingDiff(finalState.hdgMag, target) : null;
     if(compliedAt){
       // A flat response-delay allowance is fair for a 10 deg nudge but
       // unfair for a full reversal - standard rate turn (Pilot/Controller
@@ -2554,7 +2768,7 @@ function evaluateExchange(ex, cfg){
       // physical-turn time to the base allowance instead of judging every
       // heading change against the same number regardless of size.
       const delay = hdgProgressStart ? compliedAt.timeMin - hdgProgressStart.timeMin : null;
-      const expectedMax = cfg.responseDelayMax + (hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target)/180 : 0);
+      const expectedMax = cfg.responseDelayMax + (hdgProgressStart ? headingDiff(hdgProgressStart.hdgMag, target)/180 : 0);
       const responseStatus = (delay!=null && delay > expectedMax) ? 'warn' : 'ok';
       // Reaching the assigned heading once isn't the same as holding it.
       // BeyondATC will sometimes re-vector ("correct") a player who has
@@ -2577,8 +2791,8 @@ function evaluateExchange(ex, cfg){
       const afterCompliance = hdgWin.slice(compliedIdx+1).filter(s => !hasStoppedFlying(s));
       let worstDrift = null;
       for(const s of afterCompliance){
-        const d = headingDiff(s.hdg, target);
-        if(d > cfg.hdgTol && (!worstDrift || d > headingDiff(worstDrift.hdg, target))) worstDrift = s;
+        const d = headingDiff(s.hdgMag, target);
+        if(d > cfg.hdgTol && (!worstDrift || d > headingDiff(worstDrift.hdgMag, target))) worstDrift = s;
       }
       // Same idea as worstDrift above, other direction - see ALT's matching
       // worstPreCompliance comment for the full rationale and the real log
@@ -2593,11 +2807,11 @@ function evaluateExchange(ex, cfg){
       // why: otherwise this misfires on every ordinary clearance still
       // legitimately turning toward a heading it hasn't reached yet.
       let worstPreCompliance = null;
-      if(startState && headingDiff(startState.hdg, target) <= cfg.hdgTol){
+      if(startState && headingDiff(startState.hdgMag, target) <= cfg.hdgTol){
         const beforeCompliance = hdgWin.slice(0, compliedIdx).filter(s => !hasStoppedFlying(s));
         for(const s of beforeCompliance){
-          const d = headingDiff(s.hdg, target);
-          if(d > cfg.hdgTol && (!worstPreCompliance || d > headingDiff(worstPreCompliance.hdg, target))) worstPreCompliance = s;
+          const d = headingDiff(s.hdgMag, target);
+          if(d > cfg.hdgTol && (!worstPreCompliance || d > headingDiff(worstPreCompliance.hdgMag, target))) worstPreCompliance = s;
         }
       }
       // Pre-computed here so both the worstDrift and worstPreCompliance
@@ -2608,16 +2822,16 @@ function evaluateExchange(ex, cfg){
       // silently dropping the pre-compliance story. Both branches now
       // report the pre-compliance peak (if any) and apply the same
       // approach-release softening symmetrically.
-      const preDiff = worstPreCompliance ? Math.round(headingDiff(worstPreCompliance.hdg, target)) : null;
+      const preDiff = worstPreCompliance ? Math.round(headingDiff(worstPreCompliance.hdgMag, target)) : null;
       const preReleased = preDiff!=null && releasedByApproach && preDiff <= cfg.vectorReleaseTol;
-      const preNote = worstPreCompliance ? `, peaked at ${Math.round(worstPreCompliance.hdg)}° (${preDiff}° off) before first complying` : '';
+      const preNote = worstPreCompliance ? `, peaked at ${Math.round(worstPreCompliance.hdgMag)}° (${preDiff}° off${rawHdgNote(worstPreCompliance)}) before first complying` : '';
       if(worstDrift){
-        const driftDiff = Math.round(headingDiff(worstDrift.hdg, target));
+        const driftDiff = Math.round(headingDiff(worstDrift.hdgMag, target));
         if(releasedByApproach && driftDiff <= cfg.vectorReleaseTol && (preDiff==null || preReleased)){
-          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then continued turning to ${Math.round(worstDrift.hdg)}° — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
+          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then continued turning to ${Math.round(worstDrift.hdgMag)}°${rawHdgSuffix(worstDrift)} — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
         } else {
           const status = (driftDiff <= cfg.hdgTol*2 && (preDiff==null || preDiff <= cfg.hdgTol*2)) ? 'warn' : 'bad';
-          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then drifted to ${Math.round(worstDrift.hdg)}° (${driftDiff}° off) before the next instruction`});
+          results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then drifted to ${Math.round(worstDrift.hdgMag)}° (${driftDiff}° off${rawHdgNote(worstDrift)}) before the next instruction`});
         }
       } else if(worstPreCompliance){
         if(preReleased){
@@ -2649,7 +2863,7 @@ function evaluateExchange(ex, cfg){
       // angular gap narrowed, not by the assigned turn direction, since a
       // "fly heading X" / "leave FIX heading X" clearance carries no
       // direction at all (parseHeadingClearance).
-      const startDiff = hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target) : null;
+      const startDiff = hdgProgressStart ? headingDiff(hdgProgressStart.hdgMag, target) : null;
       // A shrunk gap alone isn't enough - natural heading wander during
       // level flight (a few degrees of drift over many minutes, no real
       // turn at all) can numerically "close the gap" on a huge assigned
@@ -2674,8 +2888,8 @@ function evaluateExchange(ex, cfg){
       // against a real log - added preventively, same standing the SPD
       // guard had when it was added.
       const direction = ex.clearance.heading.direction;
-      const directionalGap = (direction && hdgProgressStart) ? angularGapInDirection(hdgProgressStart.hdg, target, direction) : null;
-      const directionalFinalGap = (direction && finalState) ? angularGapInDirection(finalState.hdg, target, direction) : null;
+      const directionalGap = (direction && hdgProgressStart) ? angularGapInDirection(hdgProgressStart.hdgMag, target, direction) : null;
+      const directionalFinalGap = (direction && finalState) ? angularGapInDirection(finalState.hdgMag, target, direction) : null;
       const directionalReduction = (directionalGap!=null && directionalFinalGap!=null) ? directionalGap - directionalFinalGap : null;
       const progressing = direction
         ? (directionalReduction!=null && directionalReduction > cfg.hdgTol && directionalReduction >= directionalGap * 0.2)
@@ -2707,7 +2921,7 @@ function evaluateExchange(ex, cfg){
         // instruction when there wasn't one. The full prose label already
         // says "new instructions given before arriving," but the strip
         // (the part actually glanced at) carried no such context.
-        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdg)}°, new instructions given before arriving`, shortLabel:'New instructions given before arriving', carryover:{targetHdg:target, gap:Math.round(finalDiff)}, diagram:{target, actual:Math.round(finalState.hdg), status:'ok', actualLabel:'current'}});
+        results.push({type:'HDG', status:'ok', label:`HDG ${target}° assigned — still turning toward it, now at ${Math.round(finalState.hdgMag)}°${rawHdgSuffix(finalState)}, new instructions given before arriving`, shortLabel:'New instructions given before arriving', carryover:{targetHdg:target, gap:Math.round(finalDiff)}, diagram:{target, actual:Math.round(finalState.hdgMag), status:'ok', actualLabel:'current'}});
       } else {
         // A clearance superseded by ATC before it ran its course is never
         // a hard "bad" - whatever the aircraft was doing when interrupted
@@ -2739,7 +2953,7 @@ function evaluateExchange(ex, cfg){
         // ~176° the whole time is just the aircraft still flying its
         // approach course, not evidence it ignored the clearance).
         const spreadWin = hdgProgressStart ? hdgWin.filter(s => s.lineIndex >= hdgProgressStart.lineIndex) : hdgWin;
-        const hdgSpread = spreadWin.length ? Math.max(...spreadWin.map(s=>headingDiff(s.hdg, spreadWin[0].hdg))) : 0;
+        const hdgSpread = spreadWin.length ? Math.max(...spreadWin.map(s=>headingDiff(s.hdgMag, spreadWin[0].hdgMag))) : 0;
         // >=2 samples alone isn't enough - they also need to span real
         // elapsed time, or a clearance superseded a sample later within the
         // same one-minute PlayerState timestamp reads identically to a
@@ -2751,7 +2965,7 @@ function evaluateExchange(ex, cfg){
         // graded it identically to AAL3264's real several-minute stall.
         const spreadElapsed = spreadWin.length ? spreadWin[spreadWin.length-1].timeMin - spreadWin[0].timeMin : 0;
         const sustainedNonProgress = !hdgTriggerPending && spreadWin.length >= 2 && hdgSpread <= cfg.hdgTol && spreadElapsed >= 1;
-        const actual = Math.round(finalState.hdg);
+        const actual = Math.round(finalState.hdgMag);
         const diff = Math.round(finalDiff);
         // Also require real evidence the aircraft actually turned since the
         // clearance, not just that it ended up within vectorReleaseTol of
@@ -2771,9 +2985,9 @@ function evaluateExchange(ex, cfg){
         // heading at all, which sustainedNonProgress doesn't measure (it
         // only measures the window's own internal spread, not spread
         // relative to hdgProgressStart).
-        const turnedMeaningfully = hdgProgressStart && headingDiff(hdgProgressStart.hdg, actual) > cfg.hdgTol;
+        const turnedMeaningfully = hdgProgressStart && headingDiff(hdgProgressStart.hdgMag, actual) > cfg.hdgTol;
         if(releasedByApproach && diff <= cfg.vectorReleaseTol && turnedMeaningfully){
-          results.push({type:'HDG', status:'ok', label:`Assigned ${target}° — cleared for the approach in the same instruction, ended up at ${actual}° (${diff}° off the vector) — likely capturing the final approach course, not independently verified from available states`, diagram:{target, actual, status:'ok'}});
+          results.push({type:'HDG', status:'ok', label:`Assigned ${target}° — cleared for the approach in the same instruction, ended up at ${actual}° (${diff}° off the vector${rawHdgNote(finalState)}) — likely capturing the final approach course, not independently verified from available states`, diagram:{target, actual, status:'ok'}});
         } else {
         // A never-superseded HDG clearance running out of elapsed time
         // isn't a violation - the exact HDG-side parallel to the ALT
@@ -2795,7 +3009,7 @@ function evaluateExchange(ex, cfg){
         // (responseDelayMax + heading-delta/180, 3°/sec standard rate) so
         // the bar for "had a fair chance" is the same either way.
         const elapsedAvail = hdgProgressStart ? finalState.timeMin - hdgProgressStart.timeMin : 0;
-        const expectedMaxAvail = cfg.responseDelayMax + (hdgProgressStart ? headingDiff(hdgProgressStart.hdg, target)/180 : 0);
+        const expectedMaxAvail = cfg.responseDelayMax + (hdgProgressStart ? headingDiff(hdgProgressStart.hdgMag, target)/180 : 0);
         // Extended 2026-09-08 to also cover a SUPERSEDED heading vector with
         // too little elapsed time to have had a fair shot at compliance -
         // exact HDG-side port of the identical ALT-side extension (see that
@@ -2825,7 +3039,7 @@ function evaluateExchange(ex, cfg){
         // this clearance's window closed, which can be well before "now" if
         // it was superseded. Matches the "ended up at X°" wording the
         // approach-intercept branch above already uses for the same concept.
-        results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°, ${diff}° off`, diagram:{target, actual, status}});
+        results.push({type:'HDG', status, label:`Assigned ${target}° — ended at ${actual}°${rawHdgSuffix(finalState)}, ${diff}° off`, diagram:{target, actual, status}});
         }
         }
       }
@@ -4471,9 +4685,10 @@ function recompute(){
     const fmtFt = v => `${Math.round(v).toLocaleString()}ft`;
     const fmtHdg = v => `${Math.round(v)}°`;
     const fmtKt = v => `${Math.round(v)}kt`;
-    const makeTrio = (axisLabel, axisType, readingVal, open, fmt, tol) => {
+    const makeTrio = (axisLabel, axisType, readingVal, open, fmt, tol, readingNote) => {
       const assignedVal = open.targetFt ?? open.targetHdg ?? open.targetKt;
-      const gap = Math.abs(readingVal - assignedVal);
+      // A heading gap wraps at north (358 against 005 is 7 degrees, not 353).
+      const gap = axisType==='HDG' ? headingDiff(readingVal, assignedVal) : Math.abs(readingVal - assignedVal);
       const assignedDisplay = (axisType==='SPD' && open.implied) ? `${fmt(assignedVal)} (min approach)` : fmt(assignedVal);
       // Within the axis's own existing compliance tolerance reads as "on
       // target," not a small nonzero number that looks like an open
@@ -4485,7 +4700,7 @@ function recompute(){
         axis: axisType,
         assignedAtLineIndex: open.assignedAtLineIndex,
         cells: {
-          cell1:{label:axisLabel, value: fmt(readingVal)},
+          cell1:{label:axisLabel, value: fmt(readingVal), ...(readingNote ? {note: readingNote} : {})},
           cell2:{label:'Assigned', value: assignedDisplay},
           cell3:{label:'Gap remaining', value: gapDisplay}
         }
@@ -4494,7 +4709,7 @@ function recompute(){
 
     const candidates = [];
     if(openAlt) candidates.push({axisType:'ALT', open:openAlt, own: !!ex.clearance.altitude, trio: makeTrio('Altitude','ALT', reading.alt, openAlt, fmtFt, cfgv.altTol)});
-    if(openHdg) candidates.push({axisType:'HDG', open:openHdg, own: !!ex.clearance.heading, trio: makeTrio('Heading','HDG', reading.hdg, openHdg, fmtHdg, cfgv.hdgTol)});
+    if(openHdg) candidates.push({axisType:'HDG', open:openHdg, own: !!ex.clearance.heading, trio: makeTrio('Heading (magnetic)','HDG', reading.hdgMag, openHdg, fmtHdg, cfgv.hdgTol, rawHdgSuffix(reading).trim().replace(/^\(|\)$/g, ''))});
     if(openSpd) candidates.push({axisType:'SPD', open:openSpd, own: !!ex.clearance.speed, trio: makeTrio('Speed','SPD', reading.spd, openSpd, fmtKt, cfgv.spdTol)});
     if(!candidates.length) return;
 
@@ -4952,8 +5167,10 @@ function vectorDetailLines(vector, afterDeviation){
     const base = VECTOR_REASON_WORDS[vi.reason] || vi.reason;
     const suffix = vi.reasonSuffix ? (vi.reasonSuffix === 'final-intercept' ? ' (final intercept)' : ' (' + vi.reasonSuffix + ')') : '';
     const bits = [];
-    if(Number.isFinite(vi.cmdTrue)) bits.push('commanded track ' + vecDeg(vi.cmdTrue) + ' true');
-    if(Number.isFinite(vi.acTrue)) bits.push('aircraft track ' + vecDeg(vi.acTrue) + ' true');
+    // Both are headings (acTrue matches PlayerState hdg to within 2 degrees in
+    // 179 of 180 logged samples), true degrees - not ground tracks.
+    if(Number.isFinite(vi.cmdTrue)) bits.push('commanded heading ' + vecDeg(vi.cmdTrue) + ' true');
+    if(Number.isFinite(vi.acTrue)) bits.push('aircraft heading ' + vecDeg(vi.acTrue) + ' true');
     if(Number.isFinite(vi.turnDeg)) bits.push(Math.abs(Math.round(vi.turnDeg)) + '° turn ' + (vi.turnDeg < 0 ? 'left' : 'right'));
     lines.push('BeyondATC logged ' + base + suffix + (bits.length ? ': ' + bits.join(', ') : '') + '.');
     if(vi.reason === 'Replan' && afterDeviation) lines.push('An earlier card in this leg notes that BeyondATC saw the aircraft off its heading.');
@@ -5430,14 +5647,14 @@ function headingCompassSvg({target, actual, status, actualLabel='actual'}){
   return `<div class="mini-diagram">
     <svg width="80" height="80" viewBox="0 0 80 80">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="1.5"/>
-      <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dim)">N</text>
+      <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dim)">N (mag)</text>
       <line x1="${cx}" y1="${cy}" x2="${tx}" y2="${ty}" stroke="var(--target)" stroke-width="2" stroke-dasharray="3,2"/>
       <line x1="${cx}" y1="${cy}" x2="${ax}" y2="${ay}" stroke="${color}" stroke-width="2.5"/>
       <circle cx="${cx}" cy="${cy}" r="1.6" fill="var(--text)"/>
     </svg>
     <div class="mini-diagram-legend">
-      <span style="color:var(--target)">┄ assigned ${target}°</span>
-      <span style="color:${color}">━ ${actualLabel} ${actual}°</span>
+      <span style="color:var(--target)">┄ assigned ${target}°M</span>
+      <span style="color:${color}">━ ${actualLabel} ${actual}°M</span>
     </div>
   </div>`;
 }
@@ -5503,7 +5720,7 @@ function miniSketchSvg(departure, destination, current){
 // see Design Docs/atc-debugger-timeline-cards.md. A dumb 3-cell template -
 // the trio pass in recompute() decides what goes in each cell directly.
 function stateStripHtml({cell1, cell2, cell3}, status){
-  const cellHtml = c => `<div class="state-cell"><div class="lbl">${escapeHtml(c.label)}</div><div class="val">${escapeHtml(c.value)}</div></div>`;
+  const cellHtml = c => `<div class="state-cell"><div class="lbl">${escapeHtml(c.label)}</div><div class="val">${escapeHtml(c.value)}</div>${c.note ? `<div class="note">${escapeHtml(c.note)}</div>` : ''}</div>`;
   return `<div class="state-strip ${status}">${cellHtml(cell1)}${cellHtml(cell2)}${cellHtml(cell3)}</div>`;
 }
 // A group of one or more trios, wrapped with a per-trio axis-caption
@@ -5554,7 +5771,7 @@ function renderStrip(ex){
   // Design Docs/vfr-dynamic-flight-state-display.md.
   const stateReadoutHtml = (isVfr && ex.atc.state && ex.flightPhase && ex.flightPhase!=='ground') ? (()=>{
     const s = ex.atc.state;
-    const parts = [`<span>HDG</span>${Math.round(s.hdg)}°`, `<span>ALT</span>${Math.round(s.alt).toLocaleString()}ft`];
+    const parts = [`<span>HDG</span>${Math.round(s.hdgMag)}°M`, `<span>ALT</span>${Math.round(s.alt).toLocaleString()}ft`];
     if(ex.flightPhase==='approach') parts.push(`<span>SPD</span>${Math.round(s.spd)}kt`);
     return `<div class="state-readout">${parts.join('')}</div>`;
   })() : '';
@@ -5577,7 +5794,7 @@ function renderStrip(ex){
     const dist = distanceNm(departureLatLon.lat, departureLatLon.lon, s.lat, s.lon);
     const brg = bearingDeg(departureLatLon.lat, departureLatLon.lon, s.lat, s.lon);
     const origLabel = PARSED.meta.orig ? ` (${PARSED.meta.orig})` : '';
-    return `<div class="locline">📍︎ ${dist.toFixed(1)}nm ${compassPoint(brg)} of departure${origLabel} · bearing ${Math.round(brg)}°</div>`;
+    return `<div class="locline">📍︎ ${dist.toFixed(1)}nm ${compassPoint(brg)} of departure${origLabel} · bearing ${Math.round(brg)}° true</div>`;
   })() : '';
   const locationSketchHtml = showLocation
     ? miniSketchSvg(departureLatLon, fieldElevations.arrivalLatLon, {lat:ex.atc.state.lat, lon:ex.atc.state.lon})
@@ -5701,7 +5918,7 @@ function renderStrip(ex){
 function renderStateKV(s, dropAxes){
   const rows = [];
   if(!dropAxes || !dropAxes.has('ALT')) rows.push(`<div class="kv"><span>Altitude</span><b>${Math.round(s.alt).toLocaleString()} ft</b></div>`);
-  if(!dropAxes || !dropAxes.has('HDG')) rows.push(`<div class="kv"><span>Heading</span><b>${Math.round(s.hdg)}°</b></div>`);
+  if(!dropAxes || !dropAxes.has('HDG')) rows.push(`<div class="kv"><span>Heading</span><b>${Math.round(s.hdgMag)}°M${escapeHtml(rawHdgSuffix(s))}</b></div>`);
   if(!dropAxes || !dropAxes.has('SPD')) rows.push(`<div class="kv"><span>Speed (IAS)</span><b>${Math.round(s.spd)} kt</b></div>`);
   rows.push(`<div class="kv"><span>Ground speed</span><b>${Math.round(s.gs)} kt</b></div>`);
   rows.push(`<div class="kv"><span>In vector</span><b>${s.inVector?'Yes':'No'}</b></div>`);

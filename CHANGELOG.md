@@ -4,6 +4,19 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.19.1] - 2026-10-09
+
+### Fixed
+- **Heading checks compared two different kinds of north.** BeyondATC's log records the aircraft's heading in true degrees, while ATC speaks headings in magnetic degrees (what the cockpit compass shows), and the tool compared the two numbers directly at its 5° tolerance. Wherever magnetic variation is larger than about 5° (much of the United States, for example), a correctly flown heading could be recorded as a violation or caution, and a real miss could be hidden. Each logged heading is now converted to magnetic, using the World Magnetic Model (WMM2025) at the aircraft's own position, before it is compared. Measured against BeyondATC's own spoken headings, the conversion reproduced them exactly in 172 of 178 real pairs, and on settled compliant flights the converted heading lands a median 1° from the spoken one (10° before the conversion).
+- **Expect some past heading verdicts to change.** Across the 63 sample logs the tool is tested against, 25 distinct heading verdicts changed status: 15 false violations or cautions went away, 7 deviations that had been hidden are now flagged, and 3 cautions became violations.
+
+### Changed
+- **Cards show headings in magnetic degrees, with the raw log value beside them.** The Heading readout is labelled "Heading (magnetic)" with a note such as "log 358° true"; verdict wording that quotes the aircraft's heading adds the log value when it differs; the VFR readout and the detail row mark magnetic with "M"; the compass diagram is marked magnetic. The vectoring detail now says "commanded heading ... true" and "aircraft heading ... true" (both are headings, not tracks), and the VFR location bearing says "true".
+- The heading gap on a card now wraps at north (358° against 005° is 7°, not 353°).
+
+### Notes
+- The magnetic model is valid to the end of 2029; its coefficient table will need replacing then.
+
 ## [1.19.0] - 2026-10-04
 
 ### Added
