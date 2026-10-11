@@ -4,6 +4,21 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.20.0] - 2026-10-11
+
+### Added
+- **A map in each heading instruction's expanded detail.** It plots the recorded positions from just before the instruction to the next heading instruction, the assigned heading, and BeyondATC's planned line where the log shows the aircraft is steering to one, with a strip of three headings (assigned, aircraft when issued, BeyondATC's planned course or the direction of its plan's first leg). The straight lines between positions are marked as guesses, since BeyondATC records a position only when someone transmits. When the next position is far away the card opens as a close-up with a dotted line and an arrow giving its distance, and a **Whole stretch** button joins everything the aircraft could have flown. Information only: no verdict, count, filter or colour changes.
+- **The filed route on the map**, from the header of newer logs: a grey dotted line, the names of route fixes inside the map and arrows with distances to the nearest three outside it.
+- **Notes from BeyondATC's own path records**, always beginning "BeyondATC's record": blue for a new plan or a measurement off its planned line with no judgement recorded, green when BeyondATC decided against a new plan because it judged the pilot compliant, amber when it flagged the aircraft as off its assigned heading. Never red, because the same records appear on flights flown correctly.
+- **A check of BeyondATC's own "planned track" statement**: its figure and direction against the recorded positions, measured to the planned line extended and saying how far past the end of the leg the aircraft was when it was. It checks BeyondATC's statement, not the pilot, and changes no verdict.
+- **The direction of the plan's first leg** (a violet arrow and box) on cards where BeyondATC does not record the point it is steering to, labelled as the plan's direction, not the aircraft's track.
+
+### Changed
+- **Plainer wording on the heading card.** Positions are "recorded", BeyondATC's plan is its "planned line", the vectoring notes say "its first heading for this leg", "a new plan" and "a correction because the aircraft was off its planned line" instead of BeyondATC's internal terms, the takeover note says the aircraft went past BeyondATC's outer limit for this heading and BeyondATC took over to generate new vectors, and the state panel says "Under radar vectors". BeyondATC's own internal point names no longer appear on the card; the Fix row shows a dash for them and real fix names as before.
+
+### Fixed
+- The Fix row of the aircraft state panel now escapes the text it shows from the log.
+
 ## [1.19.1] - 2026-10-09
 
 ### Fixed

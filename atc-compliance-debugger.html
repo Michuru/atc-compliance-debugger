@@ -37,6 +37,7 @@
   --ref:#7fb8d9;
   --ref-2:#c9a6d9;
   --target:#e0729c;
+  --firstleg:#b48cff;
   --gray:#5c6355;
 }
 *{box-sizing:border-box;}
@@ -290,6 +291,24 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 .rawvoice{background:var(--panel-2);border-radius:6px;padding:8px 10px;color:var(--text-dim);font-size:11.5px;margin-top:10px;}
 .mini-diagram{display:flex;align-items:center;gap:12px;background:var(--panel-2);border-radius:6px;padding:8px 10px;margin-top:10px;}
 .mini-diagram-legend{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--text-dim);}
+/* Heading-card mini-map (Design Docs/atc-debugger-heading-minimap.md). Drawn colours come from the tokens above; the plan
+   uses --ref (never a verdict colour), the assigned heading --target, marker 2 and the aircraft-heading arrows --amber. */
+.hmap-wrap{margin-top:10px;background:var(--panel-2);border-radius:6px;padding:10px;}
+.hmap-svg{display:block;width:100%;max-width:640px;height:auto;}
+.hmap-list{margin:8px 0 0 0;padding-left:20px;font-size:12px;color:var(--text);line-height:1.5;}
+.hmap-strip{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
+.hmap-box{flex:1 1 150px;border:1px solid var(--line);border-radius:5px;padding:6px 8px;background:var(--panel);}
+.hmap-box span{display:block;font-size:10.5px;color:var(--text-dim);}
+.hmap-box b{display:block;font-size:14px;color:var(--text);}
+.hmap-box i{display:block;font-size:10.5px;color:var(--text-dim);font-style:normal;}
+.hmap-note{margin-top:8px;font-size:10.5px;color:var(--text-dim);line-height:1.45;}
+.hmap-rec{margin-top:8px;padding:6px 9px;border-left:4px solid var(--ref);background:var(--panel);border-radius:0 5px 5px 0;font-size:11.5px;line-height:1.45;color:var(--text);}
+.hmap-rec.green{border-left-color:var(--green);}
+.hmap-rec.amber{border-left-color:var(--amber);}
+.hmap-btnbar{display:flex;gap:6px;margin:0 0 8px;}
+.hmap-btn{font:inherit;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:3px 12px;color:var(--text-dim);background:transparent;cursor:pointer;}
+.hmap-btn.on{border-color:var(--green);color:var(--green);}
+.hmap-wrap[data-view="close"] .hmap-pane-whole, .hmap-wrap[data-view="whole"] .hmap-pane-close{display:none;}
 
 #emptyState{text-align:center;padding:60px 20px;color:var(--text-dim);}
 
@@ -837,7 +856,11 @@ function parseLog(text){
     }
     legs[legIdx].meta.procedureCandidates.push(cand);
   }
-  return { legs };
+  // Plans logged before the first "Player Callsign:" line belong to no leg (each leg starts at its own callsign line), so
+  // they are counted here by a whole-file pass. For the record only: none is ever drawn.
+  const preFeed = makePlanCollector();
+  for(let i = 0; i < bounds[0]; i++) preFeed.feed(lines[i], i);
+  return { legs, preCallsignPlans: preFeed.plans.length };
 }
 
 // Splits "a=1 | b=2 | bare" into {kv:{a:'1',b:'2'}, bare:['bare']}.
@@ -897,13 +920,158 @@ function parseVectoringLine(line, lineIndex){
   return { lineIndex, callsign: m[1], kind, nonCompliance: nc, ncKind, mode: kv.mode || null, curr: kv.curr || null, hdgT: numOrNull(kv.hdgT) };
 }
 
+// The filed route and BeyondATC's own path records, parsed for the heading-card mini-map only (Design Docs/atc-debugger-heading-minimap.md,
+// restart task 2). Informational: never fed into a verdict. Every parser returns null for a malformed or unknown line and never throws.
+// A BeyondATC point name keeps its raw text here; the card never shows a raw name (wording audit row 13).
+function isLatLon(lat, lon){ return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180; }
+const RE_ROUTE_FIXES = /^Route Fixes:\s*(.*?)\s*$/;
+// "NAME(lat,lon) NAME(lat,lon) ...": the whole line must be made of such tokens, so a half-readable line yields no route at all.
+function parseRouteFixesLine(line){
+  const m = RE_ROUTE_FIXES.exec(line || '');
+  if(!m) return null;
+  const fixes = [];
+  const rest = m[1].replace(/([^\s()]+)\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\)/g, (all, name, la, lo) => {
+    fixes.push({ name, lat: parseFloat(la), lon: parseFloat(lo) });
+    return ' ';
+  });
+  if(rest.trim() !== '' || fixes.length < 2 || !fixes.every(f => isLatLon(f.lat, f.lon))) return null;
+  return { fixes };
+}
+// "Vector_Visual_3(32.1647,-86.9269)" -> {name, lat, lon}
+function parseNamedPoint(str){
+  const m = /^\s*([^\s()]+)\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\)\s*$/.exec(str || '');
+  if(!m) return null;
+  const p = { name: m[1], lat: parseFloat(m[2]), lon: parseFloat(m[3]) };
+  return isLatLon(p.lat, p.lon) ? p : null;
+}
+// One [PathRebuild] line. kind 'rebuild' (a mode= is present: BeyondATC rebuilt its path) or 'dropped' (a dropped= request,
+// for example pilot-compliant, which BeyondATC did not act on). prevWp/targetWp are null on the variants that do not carry them.
+function parsePathRebuildLine(line, lineIndex){
+  const m = /^\[PathRebuild\]\s*(.*)$/.exec(line || '');
+  if(!m) return null;
+  const { kv } = splitVectorFields(m[1]);
+  const kind = kv.mode !== undefined ? 'rebuild' : kv.dropped !== undefined ? 'dropped' : null;
+  if(!kind || !kv.callsign) return null;
+  const a = (kv.ac || '').match(/^\((-?[\d.]+),(-?[\d.]+),(-?[\d.]+)ft,hdg(-?[\d.]+)\)$/);
+  const ac = a && isLatLon(parseFloat(a[1]), parseFloat(a[2])) ? { lat: parseFloat(a[1]), lon: parseFloat(a[2]), altFt: parseFloat(a[3]), hdg: parseFloat(a[4]) } : null;
+  return {
+    type: 'pathRebuild', lineIndex, kind, callsign: kv.callsign,
+    mode: kv.mode || null, trigger: kv.trigger || null, dropped: kv.dropped || null, request: kv.request || null,
+    crossTrackM: numOrNull(kv.crossTrack), ac, prevWp: parseNamedPoint(kv.prevWp), targetWp: parseNamedPoint(kv.targetWp)
+  };
+}
+// One [VectorReason] line (BeyondATC's own words for why it gave a new vector). leg is the planned line it measured against.
+function parseVectorReasonLine(line, lineIndex){
+  const m = /^\[VectorReason\]\s*(.*)$/.exec(line || '');
+  if(!m) return null;
+  const { kv } = splitVectorFields(m[1]);
+  if(!kv.callsign || !kv.cause) return null;
+  const lg = (kv.leg || '').match(/^(.+?\))\s*->\s*(.+\))$/);
+  const from = lg ? parseNamedPoint(lg[1]) : null, to = lg ? parseNamedPoint(lg[2]) : null;
+  return {
+    type: 'vectorReason', lineIndex, callsign: kv.callsign, cause: kv.cause,
+    spoken: kv.spoken !== undefined ? kv.spoken.replace(/^'/, '').replace(/'$/, '') : null,
+    offTrackNm: numOrNull(kv.offTrackNm), dir: kv.dir || null, leg: from && to ? { from, to } : null
+  };
+}
+// One [Tube] line, only the two kinds the card uses: a lateral breach (cross, halfWidth: half the corridor's width, in metres)
+// and BeyondATC's own NO-VERDICT text (what it had or had not told the pilot). Every other [Tube] line is null.
+function parseTubeLine(line, lineIndex){
+  const m = /^\[Tube\]\s*(.*)$/.exec(line || '');
+  if(!m) return null;
+  const { kv } = splitVectorFields(m[1]);
+  if(!kv.callsign) return null;
+  if(kv.breach === 'lateral'){
+    const cross = numOrNull(kv.cross), half = numOrNull(kv.halfWidth);
+    if(cross === null || half === null) return null;
+    return { type: 'tube', lineIndex, kind: 'lateralBreach', callsign: kv.callsign, crossM: cross, halfWidthM: half, action: kv.action || null, curr: kv.curr || null };
+  }
+  if(kv['NO-VERDICT'] !== undefined) return { type: 'tube', lineIndex, kind: 'noVerdict', callsign: kv.callsign, text: kv['NO-VERDICT'], node: kv.node || null };
+  return null;
+}
+const PATH_EVENT_TAGS = ['[PathRebuild]', '[VectorReason]', '[Tube]'];
+function isPathEventLine(line){ return PATH_EVENT_TAGS.some(t => line.startsWith(t)); }
+function parsePathEventLine(line, lineIndex){
+  if(line.startsWith('[PathRebuild]')) return parsePathRebuildLine(line, lineIndex);
+  if(line.startsWith('[VectorReason]')) return parseVectorReasonLine(line, lineIndex);
+  if(line.startsWith('[Tube]')) return parseTubeLine(line, lineIndex);
+  return null;
+}
+
+// BeyondATC's intercept-vector plans: a [VectorGen] line (why and where it was planned from) followed within a few lines
+// by an [ILSVectorCalc] line (the plan itself). Parsed for the heading-card mini-map only (Design Docs/atc-debugger-heading-minimap.md);
+// informational, never fed into a verdict. generated=[0] is the first approach waypoint and the last index is the plan's start,
+// so a plan reads back to front. `src` says whether `start` is the aircraft (AppToAircraft) or a far route/STAR end: it is kept
+// for information and does not gate drawing, because Route and Star plans are flown too.
+const RE_VECTORGEN_SRC = /\bsrc=([A-Za-z]+)/;
+const RE_VECTORGEN_AC = /\bac=\((-?[\d.]+),(-?[\d.]+),(-?[\d.]+)ft\)/;
+const RE_ILS_PLAN = /^\[ILSVectorCalc\]\s+callsign=([^|]*)\|.*\|start=\((-?[\d.]+),(-?[\d.]+)\)\|end=\((-?[\d.]+),(-?[\d.]+)\)\|vecCount=(\d+)\|generated=(.*)$/;
+const PLAN_VG_WINDOW = 3;      // an [ILSVectorCalc] line takes its [VectorGen] from at most this many lines earlier
+const PLAN_DEDUPE_LINES = 5;   // identical Route/Star plans are logged as a pair a couple of lines apart
+function parseVectorGenLine(line){
+  const s = line.match(RE_VECTORGEN_SRC);
+  if(!s) return null;
+  const a = line.match(RE_VECTORGEN_AC);
+  const ac = a ? { lat: parseFloat(a[1]), lon: parseFloat(a[2]), altFt: parseFloat(a[3]) } : null;
+  return { src: s[1], ac: ac && Number.isFinite(ac.lat) && Number.isFinite(ac.lon) ? ac : null };
+}
+// One [ILSVectorCalc] line (plus the [VectorGen] read just before it, or null). A malformed or inconsistent line yields null
+// and never throws: the point list must number 0..n-1, match vecCount, and hold real coordinates.
+function parsePlanLine(line, lineIndex, vg){
+  const m = line.match(RE_ILS_PLAN);
+  if(!m) return null;
+  const n = parseInt(m[6], 10);
+  const points = [];
+  const re = /\[(\d+)\]\((-?[\d.]+),(-?[\d.]+)\)/g;
+  let pm;
+  while((pm = re.exec(m[7]))){
+    if(parseInt(pm[1], 10) !== points.length) return null;
+    points.push({ lat: parseFloat(pm[2]), lon: parseFloat(pm[3]) });
+  }
+  const start = { lat: parseFloat(m[2]), lon: parseFloat(m[3]) };
+  const end = { lat: parseFloat(m[4]), lon: parseFloat(m[5]) };
+  const ok = p => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180;
+  if(points.length < 2 || points.length !== n || !points.every(ok) || !ok(start) || !ok(end)) return null;
+  const near = !!vg && lineIndex > vg.lineIndex && lineIndex - vg.lineIndex <= PLAN_VG_WINDOW;
+  return { lineIndex, src: near ? vg.src : null, ac: near ? vg.ac : null, callsign: m[1].trim(), start, end, points };
+}
+function samePlanGeometry(a, b){
+  return a.callsign === b.callsign && a.start.lat === b.start.lat && a.start.lon === b.start.lon && a.end.lat === b.end.lat && a.end.lon === b.end.lon
+    && a.points.length === b.points.length && a.points.every((p, i) => p.lat === b.points[i].lat && p.lon === b.points[i].lon);
+}
+// Feeds log lines in order; returns true when it consumed the line. Identical pairs a couple of lines apart are kept once.
+function makePlanCollector(){
+  let vg = null;
+  const plans = [];
+  return {
+    plans,
+    feed(line, i){
+      if(line.startsWith('[VectorGen]')){
+        const g = parseVectorGenLine(line);
+        if(g){ g.lineIndex = i; vg = g; }
+        return true;
+      }
+      if(line.startsWith('[ILSVectorCalc]')){
+        const p = parsePlanLine(line, i, vg);
+        const last = plans[plans.length - 1];
+        if(p && !(last && samePlanGeometry(last, p) && p.lineIndex - last.lineIndex <= PLAN_DEDUPE_LINES)) plans.push(p);
+        return true;
+      }
+      return false;
+    }
+  };
+}
+
 function parseLegLines(lines, startIdx, endIdx){
+  const planFeed = makePlanCollector();
   let lastState = null, lastLVI = null, lastLVILine = -999, lastPlayerActionLine = -999;
   const states = [];       // all PlayerState samples, chronological
   let hdgMagFallbacks = 0; // states with no usable position: hdgMag left equal to hdg (expected none)
   const events = [];       // all Instruction events (ATC or PILOT)
   const vectorIssues = []; // BeyondATC's [VectorIssue] lines (informational only)
   const vectoring = [];    // BeyondATC's [Vectoring] lines (informational only)
+  const pathEvents = [];   // BeyondATC's [PathRebuild]/[VectorReason]/[Tube] lines, every aircraft (filtered to the player at use; informational only)
+  let routeFixes = null;   // the leg's "Route Fixes:" header line, first one wins: {lineIndex, fixes:[{name,lat,lon}]}
   // Message IDs of CPDLC clearances synthesized as real ATC events this leg -
   // a later WILCO ack is only synthesized as this clearance's readback when
   // its own MRN= references one of these, never on From= alone. See
@@ -959,6 +1127,17 @@ function parseLegLines(lines, startIdx, endIdx){
       if(vg) vectoring.push(vg);
       continue;
     }
+    if(isPathEventLine(line)){
+      const pe = parsePathEventLine(line, i);
+      if(pe) pathEvents.push(pe);
+      continue;
+    }
+    if(line.startsWith('Route Fixes:')){
+      const rf = parseRouteFixesLine(line);
+      if(rf && !routeFixes) routeFixes = { lineIndex: i, fixes: rf.fixes };
+      continue;
+    }
+    if(planFeed.feed(line, i)) continue;
 
     if(RE_PLAYER_ACTION.test(line)){
       lastPlayerActionLine = i;
@@ -1173,7 +1352,9 @@ function parseLegLines(lines, startIdx, endIdx){
 
   meta.flightRules = findFlightRulesForLeg(lines, startIdx);
   meta.hdgMagFallbacks = hdgMagFallbacks;
-  return { meta, states, events, vectorIssues, vectoring };
+  // Only the player's own plans: other aircraft's plans carry another callsign (ICAO form, as on the plan line itself).
+  const plans = planFeed.plans.filter(p => meta.playerCallsigns.includes(p.callsign));
+  return { meta, states, events, vectorIssues, vectoring, plans, pathEvents, routeFixes };
 }
 
 /* ============================================================
@@ -5151,9 +5332,9 @@ function vectorFlag(vector){
 // own words, never the raw log line. The result goes through escapeHtml at render time, so a log-derived token (an
 // unknown reason, a suffix) can only ever appear as text.
 const VECTOR_REASON_WORDS = {
-  Initial: 'an initial vector', Replan: 'a re-plan', TrackDeviation: 'a track-deviation correction',
-  TubeAdjust: 'a route-corridor adjustment', CrossTrackDeviation: 'a cross-track correction',
-  SegmentAdvance: 'an advance to the next route segment'
+  Initial: 'its first heading for this leg', Replan: 'a new plan', TrackDeviation: 'a correction because the aircraft was off its track',
+  TubeAdjust: 'an adjustment because the aircraft was off its planned line', CrossTrackDeviation: 'a correction because the aircraft was off its planned line',
+  SegmentAdvance: 'a move on to the next leg of its plan'
 };
 const VECTOR_BADGE_TEXT = 'BeyondATC saw the aircraft off its heading';
 function vecDeg(n){ return String(Math.round(((n % 360) + 360) % 360)).padStart(3, '0') + '°'; }
@@ -5169,17 +5350,17 @@ function vectorDetailLines(vector, afterDeviation){
     const bits = [];
     // Both are headings (acTrue matches PlayerState hdg to within 2 degrees in
     // 179 of 180 logged samples), true degrees - not ground tracks.
-    if(Number.isFinite(vi.cmdTrue)) bits.push('commanded heading ' + vecDeg(vi.cmdTrue) + ' true');
+    if(Number.isFinite(vi.cmdTrue)) bits.push('heading assigned ' + vecDeg(vi.cmdTrue) + ' true');
     if(Number.isFinite(vi.acTrue)) bits.push('aircraft heading ' + vecDeg(vi.acTrue) + ' true');
-    if(Number.isFinite(vi.turnDeg)) bits.push(Math.abs(Math.round(vi.turnDeg)) + '° turn ' + (vi.turnDeg < 0 ? 'left' : 'right'));
-    lines.push('BeyondATC logged ' + base + suffix + (bits.length ? ': ' + bits.join(', ') : '') + '.');
+    if(Number.isFinite(vi.turnDeg)) bits.push('a ' + Math.abs(Math.round(vi.turnDeg)) + '° turn to the ' + (vi.turnDeg < 0 ? 'left' : 'right'));
+    lines.push('BeyondATC recorded ' + base + suffix + (bits.length ? ': ' + bits.join(', ') : '') + '.');
     if(vi.reason === 'Replan' && afterDeviation) lines.push('An earlier card in this leg notes that BeyondATC saw the aircraft off its heading.');
   }
   (vector.engine || []).forEach(g => {
     const at = Number.isFinite(g.hdgT) ? ' (aircraft heading ' + vecDeg(g.hdgT) + ' true in its log)' : '';
-    if(g.ncKind === 'queried') lines.push('BeyondATC queried the heading after seeing the aircraft off its assigned heading' + at + '.');
-    else if(g.ncKind === 'outerShell') lines.push('BeyondATC logged an outer-shell breach on this heading and took authority itself' + at + '.');
-    else if(g.ncKind === 'hold') lines.push('BeyondATC suspended routine vectors for this aircraft' + at + '.');
+    if(g.ncKind === 'queried') lines.push('BeyondATC asked about the heading after seeing the aircraft off its assigned heading' + at + '.');
+    else if(g.ncKind === 'outerShell') lines.push('The aircraft went past BeyondATC’s outer limit for this heading, and BeyondATC took over to generate new vectors' + at + '.');
+    else if(g.ncKind === 'hold') lines.push('BeyondATC paused its routine headings for this aircraft' + at + '.');
     else if(g.ncKind === 'resumed') lines.push('BeyondATC cleared its non-compliance flag for this aircraft' + at + '.');
   });
   return lines;
@@ -5196,6 +5377,688 @@ function vectorAfterDeviation(ex){
   return EXCHANGES.some(o => o.lineIndex < ex.lineIndex && vectorFlag(o.vector));
 }
 
+// ============================================================
+// Heading-card mini-map (Design Docs/atc-debugger-heading-minimap.md). A north-up lat/lon plot of the logged positions from
+// just before a heading instruction to the next one, the assigned heading, and BeyondATC's plan where the log shows the
+// aircraft is on it. Display only: nothing here touches ex.eval, so no verdict moves.
+// ============================================================
+const GAP_NM = 10;             // the close-up map stops at a jump between consecutive logged positions larger than this; the whole-stretch view joins past it
+const JOIN_MIN_ALLOW_NM = 3, JOIN_SPEED_FACTOR = 2, JOIN_MIN_GS_KT = 60; // joinPlausible: how far the aircraft could have flown between two positions
+const ROUTE_ARROWS = 3;        // the filed route's nearest fixes outside the map that get an edge arrow
+const MAP_MIN_SPAN_NM = 1.5;   // the frame never shows less than this, however tight the stretch
+const HDG_LINE_MIN_NM = 1.0, HDG_LINE_FRAC = 0.5, HDG_LINE_MAX_NM = 10; // assigned-heading line length
+const MAP_W = 640, MAP_H = 300, MAP_PAD = { l: 50, r: 44, t: 14, b: 26 }; // the right margin holds the north arrow
+const NM_PER_DEG = 60;
+const EARTH_NM = 3440.065;
+const PLAN_FIX_RE = /^Vector_ILS_(BUFFER_)?(\d+)$/i;
+const PLAN_COURSE_MIN_NM = 0.2; // closer than this to the plan point it steers to, the course box is left out
+
+function norm360(d){ return ((d % 360) + 360) % 360; }
+function dLonWrap(d){ return (((d + 540) % 360) + 360) % 360 - 180; } // a longitude difference into [-180, 180)
+function distNm(a, b){
+  const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLon = dLonWrap(b.lon - a.lon) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_NM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+function bearingTrue(a, b){
+  const r = Math.PI / 180, dLon = dLonWrap(b.lon - a.lon) * r;
+  const y = Math.sin(dLon) * Math.cos(b.lat * r);
+  const x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos(dLon);
+  return norm360(Math.atan2(y, x) / r);
+}
+// Magnetic to true, the inverse of hdgToMagnetic: variation is east positive and magnetic = true - variation, so
+// true = magnetic + variation (at PEI, variation about -17: heading 015 magnetic is about 358 true).
+function hdgMagToTrue(hdgMag, lat, lon){ return norm360(hdgMag + magVariation(lat, lon, MAG_VAR_ALT_KM, MAG_VAR_YEAR)); }
+function offsetPoint(p, brgDeg, nm){
+  const r = brgDeg * Math.PI / 180;
+  const lat = Math.max(-89.9, Math.min(89.9, p.lat + nm * Math.cos(r) / NM_PER_DEG));
+  const lon = p.lon + nm * Math.sin(r) / (NM_PER_DEG * Math.max(0.05, Math.cos(p.lat * Math.PI / 180)));
+  return { lat, lon };
+}
+
+// Pure: which plan, if any, governs each heading card, decided by where the log says the aircraft is steering (the state's
+// currFix) and not by line distance: a Vector_ILS_k fix means the aircraft is steering to the latest earlier plan's
+// generated[k]. Vector_ILS_BUFFER_n is an intermediate point BeyondATC steers to along the plan's first leg (the index falls as
+// the aircraft advances; measured over 51 cards in 11 logs); its position is not logged, so no leg is named. Also records
+// each card's next heading card's state (marker 2). Result goes on ex.plan, never into ex.eval.
+function planGeneratedAt(states, plan){
+  let t = null;
+  for(const s of states){ if(s.lineIndex < plan.lineIndex) t = s.timeMin; else break; }
+  return t;
+}
+function linkPlans(exchanges, parsed){
+  const plans = parsed.plans || [], states = parsed.states || [];
+  const cards = exchanges
+    .filter(ex => ex.clearance && ex.clearance.heading && ex.atc && ex.atc.speaker === 'ATC')
+    .sort((a, b) => a.lineIndex - b.lineIndex);
+  cards.forEach((ex, ci) => {
+    ex.hdgMapCard = true;
+    ex.nextHdgState = ci + 1 < cards.length ? (cards[ci + 1].atc.state || null) : null;
+    ex.plan = null;
+    const st = ex.atc.state;
+    const fm = st && st.currFix ? st.currFix.match(PLAN_FIX_RE) : null;
+    if(!fm) return;
+    let plan = null;
+    for(const p of plans){ if(p.lineIndex < ex.lineIndex) plan = p; else break; }
+    if(!plan) return;
+    const idx = parseInt(fm[2], 10);
+    const generatedAt = planGeneratedAt(states, plan);
+    if(fm[1]){ ex.plan = { plan, k: null, buffer: true, bufferIndex: idx, generatedAt }; return; }
+    if(idx >= plan.points.length) return;
+    ex.plan = { plan, k: idx, buffer: false, bufferIndex: null, generatedAt };
+  });
+}
+
+// ---- BeyondATC's own path records on a heading card (restart design, choices C to F). Display only: nothing here touches ex.eval.
+// A record is tied to the nearest heading card inside a window from PATH_WINDOW_BEFORE lines before the instruction to PATH_WINDOW_AFTER
+// lines after it (checked against the corpus: no rebuild, dropped request, reason or breach line falls in two cards' windows), and only
+// the player's own records count. The note is always BeyondATC's statement of what it measured, in plain words, never this tool's verdict.
+const PATH_WINDOW_BEFORE = 40, PATH_WINDOW_AFTER = 15;
+const OFFTRACK_TOLERANCE_NM = 0.3;   // BeyondATC's own figure and the distance worked out here agree within this
+const M_PER_NM = 1852;
+function linkPathRecords(exchanges, parsed){
+  const cards = exchanges
+    .filter(ex => ex.clearance && ex.clearance.heading && ex.atc && ex.atc.speaker === 'ATC')
+    .sort((a, b) => a.lineIndex - b.lineIndex);
+  cards.forEach(ex => { ex.pathRecords = []; });
+  const mine = new Set(parsed.meta.playerCallsigns || []);
+  const unmatched = [];
+  (parsed.pathEvents || []).forEach(rec => {
+    if(!mine.has(rec.callsign)) return;
+    let best = null;
+    for(const ex of cards){
+      const off = rec.lineIndex - ex.lineIndex;
+      if(off < -PATH_WINDOW_BEFORE || off > PATH_WINDOW_AFTER) continue;
+      if(!best || Math.abs(off) < Math.abs(best.off)) best = { ex, off };
+    }
+    if(best) best.ex.pathRecords.push(rec); else unmatched.push(rec);
+  });
+  cards.forEach(ex => ex.pathRecords.sort((a, b) => a.lineIndex - b.lineIndex));
+  return unmatched;
+}
+// The clock time of the last logged position at or before a log line (the records carry no time of their own).
+function timeAtLine(states, lineIndex){
+  let t = null;
+  for(const s of states || []){ if(s.lineIndex <= lineIndex) t = s.timeMin; else break; }
+  return t;
+}
+const COMPASS8 = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'];
+function compass8(brg){ return COMPASS8[Math.round(norm360(brg) / 45) % 8]; }
+function nmText(m){ return (m / M_PER_NM).toFixed(1); }
+
+// Pure: the notes for a card, each { tone, text }. Tone is what BeyondATC's own log concluded: blue is a path event with no judgement,
+// green is BeyondATC itself judging the pilot compliant (a rebuild request it dropped as pilot-compliant), amber is BeyondATC's own
+// non-compliance flag (the existing badge rule). Never red. Every text begins "BeyondATC's record".
+function pathNotes(ex, states){
+  const recs = ex.pathRecords || [];
+  const notes = [];
+  const rebuilds = recs.filter(r => r.type === 'pathRebuild' && r.kind === 'rebuild');
+  const dropped = recs.filter(r => r.type === 'pathRebuild' && r.kind === 'dropped' && /pilot-compliant/i.test(r.dropped || ''));
+  const breaches = recs.filter(r => r.type === 'tube' && r.kind === 'lateralBreach');
+  const used = new Set();
+  const at = r => { const t = timeAtLine(states, r.lineIndex); return t == null ? '' : ` at ${fmtTime(t)}`; };
+  const none = ' It recorded no judgement on whether the pilot was compliant.';
+  rebuilds.forEach(r => {
+    const b = breaches.find(x => !used.has(x) && Math.abs(x.lineIndex - r.lineIndex) <= 12);
+    if(b) used.add(b);
+    let txt = `BeyondATC’s record:${at(r)} it drew up a new plan.`;
+    if(Number.isFinite(r.crossTrackM)){
+      txt += ` It measured the aircraft ${nmText(r.crossTrackM)} nm off its planned line`;
+      if(b) txt += ` (it allows about ${nmText(b.halfWidthM)} nm either side)`;
+      txt += '.';
+    }
+    notes.push({ tone: 'blue', text: txt + none });
+  });
+  dropped.forEach(r => {
+    // A breach line next to a dropped request is the same event: one note, so a card never says both "no judgement" and "judged compliant".
+    const b = breaches.find(x => !used.has(x) && Math.abs(x.lineIndex - r.lineIndex) <= 12);
+    if(b) used.add(b);
+    const how = Number.isFinite(r.crossTrackM) ? ` after measuring the aircraft ${nmText(r.crossTrackM)} nm off its planned line${b ? ` (it allows about ${nmText(b.halfWidthM)} nm either side)` : ''}` : '';
+    notes.push({ tone: 'green', text: `BeyondATC’s record: it considered drawing up a new plan${how}, and decided against it because it judged the pilot compliant.` });
+  });
+  breaches.filter(b => !used.has(b)).forEach(b => {
+    notes.push({ tone: 'blue', text: `BeyondATC’s record:${at(b)} it measured the aircraft ${nmText(b.crossM)} nm off its planned line, where it allows about ${nmText(b.halfWidthM)} nm either side.${none}` });
+  });
+  if(vectorFlag(ex.vector)) notes.push({ tone: 'amber', text: 'BeyondATC’s record: it flagged the aircraft as off its assigned heading.' });
+  return notes;
+}
+
+// Pure: where a point sits relative to the line through a and b (local flat frame, nautical miles): the distance to the line extended,
+// the compass direction of the point from the line, and how far along the leg it is (alongNm from a; legNm the leg's own length).
+function lineGeometry(a, b, p){
+  const cos = Math.max(0.05, Math.cos(p.lat * Math.PI / 180));
+  const rel = q => ({ x: dLonWrap(q.lon - p.lon) * NM_PER_DEG * cos, y: (q.lat - p.lat) * NM_PER_DEG });
+  const A = rel(a), B = rel(b), dx = B.x - A.x, dy = B.y - A.y, L = Math.hypot(dx, dy);
+  if(!(L > 1e-6)) return null;
+  const ux = dx / L, uy = dy / L;
+  const along = (0 - A.x) * ux + (0 - A.y) * uy;            // the point is the origin
+  const fx = A.x + ux * along, fy = A.y + uy * along;        // the foot of the perpendicular on the extended line
+  const dist = Math.hypot(fx, fy);
+  const brg = dist > 1e-9 ? norm360(Math.atan2(-fx, -fy) * 180 / Math.PI) : null; // from the foot to the point
+  return { distNm: dist, brg, dir: brg === null ? null : compass8(brg), alongNm: along, legNm: L,
+    pastEndNm: along > L ? along - L : 0, beforeStartNm: along < 0 ? -along : 0 };
+}
+
+// Pure: the check of BeyondATC's "planned track" statement (choice D, option 2), or null. Evidence only: it checks BeyondATC's own
+// claim against the logged positions and never marks the pilot; the verdict does not read it. Measured at the position BeyondATC used
+// (the position in its own rebuild record) when there is one, else at the instruction. The distance is to the line extended, which is
+// how BeyondATC measured it; the distance to the leg's segment would wrongly refute it when the aircraft is past the leg's end.
+function offTrackCheck(ex){
+  const recs = ex.pathRecords || [];
+  const vr = recs.find(r => r.type === 'vectorReason' && /^OffTrack$/i.test(r.cause || '') && r.leg && Number.isFinite(r.offTrackNm));
+  if(!vr) return null;
+  const rb = recs.filter(r => r.type === 'pathRebuild' && r.ac).sort((a, b) => Math.abs(a.lineIndex - vr.lineIndex) - Math.abs(b.lineIndex - vr.lineIndex))[0];
+  const m1 = ex.atc && ex.atc.state;
+  const pos = rb ? { lat: rb.ac.lat, lon: rb.ac.lon, source: 'rebuild' } : (m1 && Number.isFinite(m1.lat) && Number.isFinite(m1.lon) ? { lat: m1.lat, lon: m1.lon, source: 'instruction' } : null);
+  if(!pos) return null;
+  const g = lineGeometry(vr.leg.from, vr.leg.to, pos);
+  if(!g || g.dir === null) return null;
+  const said = /(\d+(?:\.\d+)?)\s+miles?\s+(north|south|east|west|northeast|northwest|southeast|southwest)\s+of\b/i.exec(vr.spoken || '');
+  const claimDir = (vr.dir || (said ? said[2] : '') || '').toLowerCase();
+  const di = COMPASS8.indexOf(claimDir), gi = COMPASS8.indexOf(g.dir);
+  const adjacent = !claimDir || di >= 0 && gi >= 0 && (Math.abs(di - gi) % 8 === 0 || Math.abs(di - gi) % 8 === 1 || Math.abs(di - gi) % 8 === 7);
+  const agrees = Math.abs(g.distNm - vr.offTrackNm) <= OFFTRACK_TOLERANCE_NM && adjacent;
+  const told = recs.some(r => r.type === 'tube' && r.kind === 'noVerdict' && /no heading told for this leg yet/i.test(r.text || ''));
+  return { claimNm: vr.offTrackNm, claimDir, saidMiles: said ? said[1] : null, computedNm: g.distNm, computedDir: g.dir, agrees,
+    pastEndNm: g.pastEndNm, beforeStartNm: g.beforeStartNm, source: pos.source, noHeadingTold: told };
+}
+function offTrackCheckLines(c){
+  const who = c.saidMiles ? `it said the aircraft was about ${c.saidMiles} miles ${c.claimDir} of its planned line (its own figure: ${c.claimNm.toFixed(1)} nm).` : `it measured the aircraft ${c.claimNm.toFixed(1)} nm ${c.claimDir ? c.claimDir + ' of' : 'from'} its planned line.`;
+  let l1 = `Check of BeyondATC’s statement: ${who} BeyondATC’s recorded positions ${c.agrees ? 'agree' : 'give'}: ${c.computedNm.toFixed(1)} nm ${c.computedDir}.`;
+  if(c.pastEndNm > 0.05) l1 += ` The aircraft had already flown ${c.pastEndNm.toFixed(1)} nm past the end of that line, so this is the distance to the line extended.`;
+  else if(c.beforeStartNm > 0.05) l1 += ` The aircraft was still ${c.beforeStartNm.toFixed(1)} nm short of the start of that line, so this is the distance to the line extended.`;
+  const lines = [l1];
+  if(c.noHeadingTold) lines.push('BeyondATC’s record: it had not yet told this aircraft a heading for that leg.');
+  return lines;
+}
+
+// Pure: the one leg of BeyondATC's plan the card's records name (the reason line's leg, else the rebuild's previous and target points), or null.
+function cardPlannedLeg(ex){
+  const recs = ex.pathRecords || [];
+  const vr = recs.find(r => r.type === 'vectorReason' && r.leg);
+  if(vr) return { from: vr.leg.from, to: vr.leg.to };
+  const rb = recs.find(r => r.type === 'pathRebuild' && r.kind === 'rebuild' && r.prevWp && r.targetWp);
+  return rb ? { from: rb.prevWp, to: rb.targetWp } : null;
+}
+
+// Pure: the direction of the first leg of a plan whose steering point is not logged (choice E): from the plan's start to its next
+// point. Calculated here from the plan's points; it is the plan's direction, never the aircraft's track.
+function planFirstLeg(ex){
+  if(!ex.plan || !ex.plan.buffer) return null;
+  const P = ex.plan.plan.points;
+  return P.length >= 2 ? { from: P[P.length - 1], to: P[P.length - 2] } : null;
+}
+
+// Pure: the logged positions to draw for one heading card. Marker 1 is the position at the instruction (ex.atc.state); the
+// stretch is up to two positions before it, marker 1, and every logged position up to marker 2 (the next heading card's
+// position, or the last position of the card's heading window when there is none). A jump larger than GAP_NM ends the stretch
+// there (nothing is drawn across it); `gap` records it so the text can say so. Returns null when there is no usable position.
+// Pure: could the aircraft have flown from a to b between the two logged times? The only thing that stops a join in the
+// whole-stretch view. Times are whole minutes (and wrap at midnight), so one extra minute is allowed, at twice the faster
+// logged ground speed (never under JOIN_MIN_GS_KT), plus a fixed allowance for positions that share a minute.
+function joinPlausible(a, b){
+  const d = distNm(a, b);
+  if(!Number.isFinite(d)) return false;
+  const elapsedMin = Number.isFinite(a.timeMin) && Number.isFinite(b.timeMin) ? (((b.timeMin - a.timeMin) % 1440) + 1440) % 1440 : 1440;
+  const gs = Math.max(JOIN_MIN_GS_KT, Number.isFinite(a.gs) ? a.gs : 0, Number.isFinite(b.gs) ? b.gs : 0);
+  return d <= JOIN_SPEED_FACTOR * gs * (elapsedMin + 1) / 60 + JOIN_MIN_ALLOW_NM;
+}
+function headingStretch(ex, states){
+  const usable = s => s && Number.isFinite(s.lat) && Number.isFinite(s.lon);
+  const m1 = ex && ex.atc && ex.atc.state;
+  if(!usable(m1)) return null;
+  const all = (states || []).filter(usable);
+  const before = all.filter(s => s.lineIndex < m1.lineIndex).slice(-2);
+  let m2 = usable(ex.nextHdgState) && ex.nextHdgState.lineIndex > m1.lineIndex ? ex.nextHdgState : null;
+  const m2IsInstruction = !!m2;
+  if(!m2){
+    const win = (ex.hdgWindowStates || []).filter(s => usable(s) && s.lineIndex > m1.lineIndex);
+    m2 = win.length ? win[win.length - 1] : null;
+  }
+  const sameStateNext = usable(ex.nextHdgState) && ex.nextHdgState.lineIndex === m1.lineIndex;
+  const after = m2 ? all.filter(s => s.lineIndex > m1.lineIndex && s.lineIndex <= m2.lineIndex) : [];
+  const keptAfter = [];
+  let gap = null, prev = m1;
+  for(const s of after){
+    const d = distNm(prev, s);
+    if(d > GAP_NM){ gap = { nm: d, state: s, impossible: !joinPlausible(prev, s) }; break; }
+    keptAfter.push(s);
+    prev = s;
+  }
+  const keptBefore = [];
+  let nxt = m1;
+  for(let j = before.length - 1; j >= 0; j--){
+    if(distNm(before[j], nxt) > GAP_NM) break;
+    keptBefore.unshift(before[j]);
+    nxt = before[j];
+  }
+  const mk = (s, role) => ({
+    lat: s.lat, lon: s.lon, lineIndex: s.lineIndex, timeMin: s.timeMin, alt: s.alt, hdgMag: s.hdgMag,
+    hdgTrue: s.hdg, // raw-hdg-ok
+    role
+  });
+  const build = (bef, aft) => [
+    ...bef.map(s => mk(s, 'before')),
+    mk(m1, 'm1'),
+    ...aft.map((s, i) => mk(s, i === aft.length - 1 ? 'm2' : 'between'))
+  ];
+  const points = build(keptBefore, keptAfter);
+  // The whole-stretch view (restart design, choice B): every position joined in order, with the far hops kept, stopping only
+  // where the aircraft could not have flown a far hop (over GAP_NM) in the time between two positions. null when it would show nothing the
+  // close-up does not (no far hop), so a card with no far hop gets no buttons.
+  const wholeAfter = [];
+  let broke = null;
+  for(let p = m1, i = 0; i < after.length; i++){
+    if(distNm(p, after[i]) > GAP_NM && !joinPlausible(p, after[i])){ broke = { nm: distNm(p, after[i]), state: after[i] }; break; }
+    wholeAfter.push(after[i]); p = after[i];
+  }
+  // Only the next-position side is extended (the user's pick was "always join the next position"); the positions before the
+  // instruction stay as the close-up has them.
+  const hasFar = wholeAfter.length > keptAfter.length;
+  const wholePoints = hasFar ? build(keptBefore, wholeAfter) : null;
+  return {
+    points, m1Index: keptBefore.length,
+    m2Index: keptAfter.length ? points.length - 1 : null,
+    m2IsInstruction: m2IsInstruction && !gap && keptAfter.length > 0,
+    gap, sameStateNext,
+    whole: hasFar ? {
+      points: wholePoints, m1Index: keptBefore.length,
+      m2Index: wholeAfter.length ? wholePoints.length - 1 : null,
+      m2IsInstruction: m2IsInstruction && !broke && wholeAfter.length > 0,
+      broke
+    } : null
+  };
+}
+
+function clipSegmentToRect(a, b, r){
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for(const [p, q] of [[-dx, a.x - r.x0], [dx, r.x1 - a.x], [-dy, a.y - r.y0], [dy, r.y1 - a.y]]){
+    if(p === 0){ if(q < 0) return null; continue; }
+    const t = q / p;
+    if(p < 0){ if(t > t1) return null; if(t > t0) t0 = t; }
+    else { if(t < t0) return null; if(t < t1) t1 = t; }
+  }
+  return { a: { x: a.x + t0 * dx, y: a.y + t0 * dy }, b: { x: a.x + t1 * dx, y: a.y + t1 * dy } };
+}
+function edgeArrowFor(v, r){
+  const cx = (r.x0 + r.x1) / 2, cy = (r.y0 + r.y1) / 2, dx = v.x - cx, dy = v.y - cy;
+  const t = Math.min(dx ? (r.x1 - r.x0) / 2 / Math.abs(dx) : Infinity, dy ? (r.y1 - r.y0) / 2 / Math.abs(dy) : Infinity);
+  const k = Math.min(1, t) * 0.94;
+  return { x: cx + dx * k, y: cy + dy * k, bearing: norm360(Math.atan2(dx, dy) * 180 / Math.PI) };
+}
+const GRID_LADDER = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20];
+function gridStepFor(rangeDeg){
+  for(const s of GRID_LADDER){ if(Math.floor(rangeDeg / s) + 1 <= 6) return s; }
+  return GRID_LADDER[GRID_LADDER.length - 1];
+}
+function signedDeg(v, step){
+  const dec = Math.max(0, Math.min(4, Math.ceil(-Math.log10(step) - 1e-9)));
+  return (v < 0 ? '-' : '') + Math.abs(v).toFixed(dec);
+}
+const SCALE_LADDER = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200];
+function scaleBarFor(pxPerNm){
+  for(const nm of SCALE_LADDER){ if(nm * pxPerNm >= 60) return { nm, px: nm * pxPerNm }; }
+  const nm = SCALE_LADDER[SCALE_LADDER.length - 1];
+  return { nm, px: nm * pxPerNm };
+}
+
+// Pure and unit-testable: everything the drawing needs, in nautical miles east/north of marker 1 (no pixels). One uniform
+// scale, x = delta-longitude (wrapped into [-180, 180)) * cos(mid-latitude of the frame), y = north. The frame fits the
+// stretch plus the end of the assigned-heading line, padded and centred, never smaller than MAP_MIN_SPAN_NM; the plan never
+// enlarges it and is clipped at the edge (far points become edge arrows).
+// opts.mode: 'close' (default; stops at a far hop and shows it as a dotted line off the edge) or 'whole' (joins everything the
+// aircraft could have flown). opts.route: the leg's filed route, [{name, lat, lon}], drawn behind the card, never enlarging the frame.
+function buildHeadingMap(ex, states, opts){
+  opts = opts || {};
+  const full = headingStretch(ex, states);
+  if(!full) return null;
+  const whole = opts.mode === 'whole' && full.whole ? full.whole : null;
+  // The chosen view's own points and markers sit on the stretch object, so everything below reads one shape.
+  const st = whole ? { ...full, points: whole.points, m1Index: whole.m1Index, m2Index: whole.m2Index, m2IsInstruction: whole.m2IsInstruction, gap: whole.broke } : full;
+  const m1 = st.points[st.m1Index];
+  const spanNm = Math.max(0, ...st.points.map(p => distNm(m1, p)));
+  const spoken = ex.clearance && ex.clearance.heading ? ex.clearance.heading.targetHdg : null;
+  let ray = null;
+  if(Number.isFinite(spoken)){
+    const trueBrg = hdgMagToTrue(spoken, m1.lat, m1.lon);
+    const lenNm = Math.min(HDG_LINE_MAX_NM, Math.max(HDG_LINE_MIN_NM, HDG_LINE_FRAC * spanNm));
+    ray = { spokenMag: norm360(spoken), trueBrg, lenNm, end: offsetPoint(m1, trueBrg, lenNm) };
+  }
+  const frameLL = st.points.map(p => ({ lat: p.lat, lon: p.lon })).concat(ray ? [ray.end] : []);
+  const lats = frameLL.map(p => p.lat);
+  const midLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const cosMid = Math.max(0.05, Math.cos(midLat * Math.PI / 180));
+  const proj = p => ({ x: dLonWrap(p.lon - m1.lon) * NM_PER_DEG * cosMid, y: (p.lat - m1.lat) * NM_PER_DEG });
+  const fp = frameLL.map(proj);
+  const xs = fp.map(p => p.x), ys = fp.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const widthNm = Math.max((maxX - minX) * 1.24, MAP_MIN_SPAN_NM), heightNm = Math.max((maxY - minY) * 1.24, MAP_MIN_SPAN_NM);
+  const plotW = MAP_W - MAP_PAD.l - MAP_PAD.r, plotH = MAP_H - MAP_PAD.t - MAP_PAD.b;
+  const scale = Math.min(plotW / widthNm, plotH / heightNm); // pixels per nm
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const halfW = plotW / scale / 2, halfH = plotH / scale / 2;
+  const rect = { x0: cx - halfW, x1: cx + halfW, y0: cy - halfH, y1: cy + halfH };
+  const frame = { cx, cy, halfW, halfH, scale, midLat, cosMid, rect, plotW, plotH };
+
+  const points = st.points.map(p => ({ ...p, ...proj(p) }));
+  const rayOut = ray ? { ...ray, end: { ...ray.end, ...proj(ray.end) } } : null;
+
+  let plan = null;
+  if(ex.plan){
+    const P = ex.plan.plan.points.map(p => ({ ...p, ...proj(p) }));
+    const here = { x: 0, y: 0 };
+    let passed = [], ahead = [], course = null;
+    if(ex.plan.buffer){
+      ahead = P.slice().reverse();
+    } else {
+      const k = ex.plan.k;
+      passed = P.slice(k).reverse();              // start of the plan up to the point being steered to
+      ahead = [here, ...P.slice(0, k + 1).reverse()]; // position, then generated[k] ... generated[0]
+      // Within a few hundred metres of the point the bearing to it is noise (positions are logged to 4 decimals), so no course.
+      if(distNm(m1, ex.plan.plan.points[k]) >= PLAN_COURSE_MIN_NM){
+        const trueDeg = bearingTrue(m1, ex.plan.plan.points[k]);
+        course = { trueDeg, magDeg: hdgToMagnetic(trueDeg, m1.lat, m1.lon) };
+      }
+    }
+    const segs = line => { const out = []; for(let i = 0; i + 1 < line.length; i++){ const c = clipSegmentToRect(line[i], line[i + 1], rect); if(c) out.push(c); } return out; };
+    const inside = v => v.x >= rect.x0 && v.x <= rect.x1 && v.y >= rect.y0 && v.y <= rect.y1;
+    // A point shared by the passed and ahead parts (generated[k]) gets one arrow, not two on top of each other.
+    const seenV = new Set();
+    const arrows = [...passed, ...ahead].filter(v => { const key = v.x + ',' + v.y; if(seenV.has(key)) return false; seenV.add(key); return !inside(v); }).map(v => edgeArrowFor(v, rect));
+    plan = { kind: ex.plan.buffer ? 'buffer' : 'active', k: ex.plan.k, passed: segs(passed), ahead: segs(ahead), arrows, course, generatedAt: ex.plan.generatedAt };
+  }
+
+  const inRect = v => v.x >= rect.x0 && v.x <= rect.x1 && v.y >= rect.y0 && v.y <= rect.y1;
+  // Close-up with a far hop the aircraft could have flown: a dotted line from the last joined position toward the next one, cut at
+  // the frame's edge, with an arrow there that says how far it is. Nothing is dropped; it is just not drawn to scale.
+  let farJoin = null;
+  if(!whole && full.whole && full.gap && !full.gap.impossible){
+    const last = points[points.length - 1], F = { ...full.gap.state, ...proj(full.gap.state) };
+    const inside = inRect(F);
+    farJoin = { nm: full.gap.nm, from: last, to: F, inside, seg: clipSegmentToRect(last, F, rect), arrow: inside ? null : edgeArrowFor(F, rect),
+      bearingMag: hdgToMagnetic(bearingTrue(last, F), last.lat, last.lon) };
+  }
+  // The filed route (restart design, choice A option 4): the line clipped to the frame, a circle and name for each fix inside, and
+  // an edge arrow with the distance for the nearest fixes outside it.
+  let route = null;
+  const rf = Array.isArray(opts.route) ? opts.route.filter(f => f && isLatLon(f.lat, f.lon)) : [];
+  if(rf.length >= 2){
+    const R = rf.map(f => ({ ...f, ...proj(f) }));
+    const segs = [];
+    for(let i = 0; i + 1 < R.length; i++){ const c = clipSegmentToRect(R[i], R[i + 1], rect); if(c) segs.push(c); }
+    const outside = R.filter(v => !inRect(v)).map(v => ({ name: v.name, distNm: distNm(m1, v), ...edgeArrowFor(v, rect) }));
+    outside.sort((a, b) => a.distNm - b.distNm);
+    route = { segs, inFixes: R.filter(inRect), arrows: outside.slice(0, ROUTE_ARROWS) };
+  }
+
+  // BeyondATC's planned line (choice F): the one leg its records name, drawn as the line extended through that leg where it crosses the
+  // map, the leg itself stronger than the extension, with the direction it runs, its magnetic course and the aircraft's distance from it.
+  // The new plan's own points are not logged, so nothing else can be drawn. The frame never grows for it.
+  let plannedLine = null;
+  const leg = cardPlannedLeg(ex);
+  if(leg){
+    const A = proj(leg.from), B = proj(leg.to), len = Math.hypot(B.x - A.x, B.y - A.y);
+    if(len > 1e-6){
+      const ux = (B.x - A.x) / len, uy = (B.y - A.y) / len, BIG = 1e4;
+      const ext = clipSegmentToRect({ x: A.x - ux * BIG, y: A.y - uy * BIG }, { x: A.x + ux * BIG, y: A.y + uy * BIG }, rect);
+      if(ext){
+        const along = -(A.x * ux + A.y * uy), foot = { x: A.x + ux * along, y: A.y + uy * along };
+        const trueDeg = bearingTrue(leg.from, leg.to);
+        plannedLine = { ext, leg: clipSegmentToRect(A, B, rect), trueDeg, magDeg: hdgToMagnetic(trueDeg, m1.lat, m1.lon), foot, distNm: Math.hypot(foot.x, foot.y) };
+      }
+    }
+  }
+  // The direction of the plan's first leg, on a card whose plan point is not logged (choice E): an arrow from marker 1, labelled as the plan's
+  // direction and not the aircraft's track.
+  let firstLeg = null;
+  const fl = planFirstLeg(ex);
+  if(fl){
+    const trueDeg = bearingTrue(fl.from, fl.to);
+    const lenNm = Math.min(HDG_LINE_MAX_NM, Math.max(HDG_LINE_MIN_NM, HDG_LINE_FRAC * spanNm));
+    const seg = clipSegmentToRect({ x: 0, y: 0 }, proj(offsetPoint(m1, trueDeg, lenNm)), rect);
+    firstLeg = { trueDeg, magDeg: hdgToMagnetic(trueDeg, m1.lat, m1.lon), seg };
+  }
+
+  const lonMin = m1.lon + (rect.x0) / (NM_PER_DEG * cosMid), lonMax = m1.lon + (rect.x1) / (NM_PER_DEG * cosMid);
+  const latMin = m1.lat + rect.y0 / NM_PER_DEG, latMax = m1.lat + rect.y1 / NM_PER_DEG;
+  const latStep = gridStepFor(latMax - latMin), lonStep = gridStepFor(lonMax - lonMin);
+  const gridLats = [], gridLons = [];
+  for(let i = Math.ceil(latMin / latStep); i * latStep <= latMax; i++){ const v = +(i * latStep).toFixed(6); gridLats.push({ v, label: signedDeg(v, latStep), y: (v - m1.lat) * NM_PER_DEG }); }
+  for(let i = Math.ceil(lonMin / lonStep); i * lonStep <= lonMax; i++){ const v = +(i * lonStep).toFixed(6); gridLons.push({ v, label: signedDeg(dLonWrap(v), lonStep), x: (v - m1.lon) * NM_PER_DEG * cosMid }); }
+  return { stretch: st, points, m1Index: st.m1Index, m2Index: st.m2Index, gap: st.gap, ray: rayOut, frame, plan, grid: { lats: gridLats, lons: gridLons }, scaleBar: scaleBarFor(scale),
+    mode: whole ? 'whole' : 'close', hasFar: !!full.whole, farJoin, route, plannedLine, firstLeg };
+}
+
+// Pure: where the scale bar goes. Tries the four plot corners (bottom left first, so ties keep the familiar spot) and takes
+// the one whose box is farthest from every drawn position, so the bar never sits on top of the trace.
+function placeScaleBar(drawn, bw, bh, plot){
+  const m = 6;
+  const cands = [
+    { x: plot.x + m, y: plot.y + plot.h - bh - m }, { x: plot.x + plot.w - bw - m, y: plot.y + plot.h - bh - m },
+    { x: plot.x + m, y: plot.y + m }, { x: plot.x + plot.w - bw - m, y: plot.y + m }
+  ];
+  const gap = c => Math.min(Infinity, ...drawn.map(p => Math.hypot(Math.max(c.x - p.x, 0, p.x - (c.x + bw)), Math.max(c.y - p.y, 0, p.y - (c.y + bh)))));
+  let best = cands[0], bestGap = gap(cands[0]);
+  for(const c of cands.slice(1)){ const g = gap(c); if(g > bestGap + 1e-9){ best = c; bestGap = g; } }
+  return best;
+}
+
+// Wording: instruction, position at instruction, vector, course. Every dynamic piece is a number or goes through escapeHtml.
+// Three-digit heading as a cockpit shows it: north is 360, never 000.
+function hdg3(n){ const v = Math.round(norm360(n)) % 360; return String(v === 0 ? 360 : v).padStart(3, '0'); }
+// escapeHtml leaves double quotes alone (it is built for element text), so an attribute value needs them escaped too.
+function attrEscape(s){ return escapeHtml(s).replace(/"/g, '&quot;'); }
+// One drawing of the card's map ('close' or 'whole'): the svg, the two numbered lines and the text that differs per view.
+// headingMapHtml puts one or two of these inside the card's .hmap-wrap.
+function headingMapView(ex, mode){
+  if(!ex.hdgMapCard) return null;
+  const model = buildHeadingMap(ex, PARSED.states, { mode, route: PARSED.routeFixes ? PARSED.routeFixes.fixes : null });
+  if(!model) return null;
+  const f = model.frame, pts = model.points, m1 = pts[model.m1Index];
+  const m2 = model.m2Index == null ? null : pts[model.m2Index];
+  const px = p => +(MAP_PAD.l + f.plotW / 2 + (p.x - f.cx) * f.scale).toFixed(1);
+  const py = p => +(MAP_PAD.t + f.plotH / 2 - (p.y - f.cy) * f.scale).toFixed(1);
+  const overall = ex.eval && ex.eval.overall;
+  const outcome = overall === 'bad' ? 'var(--red)' : overall === 'warn' ? 'var(--amber)' : 'var(--green)';
+  const halo = 'stroke="var(--panel-2)" stroke-width="3" paint-order="stroke"';
+  const headAt = (x2, y2, bearing, color) => {
+    const r = bearing * Math.PI / 180, dx = Math.sin(r), dy = -Math.cos(r), hx = -dy, hy = dx;
+    return `<polygon points="${x2.toFixed(1)},${y2.toFixed(1)} ${(x2 - dx * 6 + hx * 3.5).toFixed(1)},${(y2 - dy * 6 + hy * 3.5).toFixed(1)} ${(x2 - dx * 6 - hx * 3.5).toFixed(1)},${(y2 - dy * 6 - hy * 3.5).toFixed(1)}" fill="${color}"/>`;
+  };
+  const arrowAt = (x, y, bearing, len, color) => {
+    const r = bearing * Math.PI / 180, x2 = x + Math.sin(r) * len, y2 = y - Math.cos(r) * len;
+    return `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="2"/>` + headAt(x2, y2, bearing, color);
+  };
+  const segLine = (s, extra) => `<line x1="${px(s.a)}" y1="${py(s.a)}" x2="${px(s.b)}" y2="${py(s.b)}" stroke="var(--ref)" stroke-width="2" stroke-dasharray="6 4" ${extra}/>`;
+  let svg = `<rect x="${MAP_PAD.l}" y="${MAP_PAD.t}" width="${f.plotW}" height="${f.plotH}" fill="var(--bg)" stroke="var(--line)"/>`;
+  model.grid.lats.forEach(g => { const y = py({ y: g.y }); svg += `<line x1="${MAP_PAD.l}" y1="${y}" x2="${MAP_PAD.l + f.plotW}" y2="${y}" stroke="var(--line)" stroke-width="0.7" opacity="0.7"/><text x="${MAP_PAD.l - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="var(--text-dim)">${escapeHtml(g.label)}</text>`; });
+  model.grid.lons.forEach(g => { const x = px({ x: g.x }); svg += `<line x1="${x}" y1="${MAP_PAD.t}" x2="${x}" y2="${MAP_PAD.t + f.plotH}" stroke="var(--line)" stroke-width="0.7" opacity="0.7"/><text x="${x}" y="${MAP_PAD.t + f.plotH + 12}" text-anchor="middle" font-size="9" fill="var(--text-dim)">${escapeHtml(g.label)}</text>`; });
+  // The filed route behind the card: a grey dotted line, a circle and name for each fix inside the map. Its edge arrows are drawn
+  // last (below), so nothing covers them.
+  if(model.route){
+    model.route.segs.forEach(s => { svg += `<line x1="${px(s.a)}" y1="${py(s.a)}" x2="${px(s.b)}" y2="${py(s.b)}" stroke="var(--text-dim)" stroke-width="1.8" stroke-dasharray="2 5"/>`; });
+    model.route.inFixes.forEach(v => { svg += `<circle cx="${px(v)}" cy="${py(v)}" r="4.5" fill="var(--panel-2)" stroke="var(--text-dim)" stroke-width="1.6"/><text x="${(px(v) + 8).toFixed(1)}" y="${(py(v) - 7).toFixed(1)}" font-size="10" fill="var(--text-dim)" ${halo}>${escapeHtml(v.name)}</text>`; });
+  }
+  if(model.plan){
+    model.plan.passed.forEach(s => { svg += segLine(s, 'opacity="0.35"'); });
+    model.plan.ahead.forEach(s => { svg += segLine(s, ''); });
+    model.plan.arrows.forEach(a => { svg += headAt(px(a), py(a), a.bearing, 'var(--ref)'); });
+    const seg = model.plan.ahead[0] || model.plan.passed[0];
+    if(seg){
+      const lx = (px(seg.a) + px(seg.b)) / 2;
+      let ly = (py(seg.a) + py(seg.b)) / 2 - 6;
+      // Keep this label off the assigned-heading label when the two would land on top of each other.
+      if(model.ray){
+        const rx = px(model.ray.end), ry = py(model.ray.end), rly = ry + (ry < MAP_PAD.t + 24 ? 14 : -6);
+        if(Math.abs(ly - rly) < 12 && Math.abs(lx - rx) < 170) ly = rly + 14;
+      }
+      ly = Math.max(MAP_PAD.t + 10, Math.min(ly, MAP_PAD.t + f.plotH - 4));
+      svg +=`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="10" fill="var(--ref)" ${halo}>BeyondATC’s planned line</text>`;
+    }
+  }
+  // BeyondATC's planned line: the extended line faint, the leg it logged stronger, an arrow for the direction it runs and its course.
+  if(model.plannedLine){
+    const pl = model.plannedLine, e = pl.ext, ex1 = px(e.b), ey1 = py(e.b);
+    const ln = (s, w, op) => `<line x1="${px(s.a)}" y1="${py(s.a)}" x2="${px(s.b)}" y2="${py(s.b)}" stroke="var(--ref)" stroke-width="${w}" stroke-dasharray="6 4" opacity="${op}"/>`;
+    // Only when the logged leg itself is inside the map is the extension drawn fainter; when just the extension crosses the map it is the line.
+    svg += ln(e, 2.2, pl.leg ? 0.4 : 1) + (pl.leg ? ln(pl.leg, 2.4, 1) : '') + headAt(ex1, ey1, pl.trueDeg, 'var(--ref)');
+    const right = ex1 > MAP_PAD.l + f.plotW * 0.6;
+    svg += `<text x="${(right ? ex1 - 8 : ex1 + 8).toFixed(1)}" y="${(ey1 + (ey1 < MAP_PAD.t + 30 ? 18 : -8)).toFixed(1)}" text-anchor="${right ? 'end' : 'start'}" font-size="10" fill="var(--ref)" ${halo}>BeyondATC’s planned line, course ${hdg3(pl.magDeg)}°M</text>`;
+  }
+  // A hop longer than GAP_NM (only in the whole-stretch view) is a dashed guess; every other hop is joined as before.
+  const trace = (list, opacity) => {
+    let out = '', run = [];
+    const flush = () => { if(run.length > 1) out += `<polyline points="${run.map(p => px(p) + ',' + py(p)).join(' ')}" fill="none" stroke="var(--text)" stroke-width="1.8" opacity="${opacity}"/>`; run = []; };
+    list.forEach((p, i) => {
+      if(i > 0 && distNm(list[i - 1], p) > GAP_NM){
+        flush();
+        out += `<line x1="${px(list[i - 1])}" y1="${py(list[i - 1])}" x2="${px(p)}" y2="${py(p)}" stroke="var(--text)" stroke-width="1.8" stroke-dasharray="6 4" opacity="${opacity}"/>`;
+      }
+      run.push(p);
+    });
+    flush();
+    return out;
+  };
+  svg += trace(pts.slice(0, model.m1Index + 1), 0.4) + trace(pts.slice(model.m1Index), 1);
+  // Edge arrows with a label: the far join's, then the filed route's nearest outside fixes. Labels on one side are nudged apart.
+  const placed = [];
+  const edgeLabel = (a, text, color) => {
+    const ax = px(a), ay = py(a), right = ax > MAP_PAD.l + f.plotW / 2;
+    let ly = ay + (ay < MAP_PAD.t + 24 ? 14 : -7);
+    for(let k = 0; k < 8; k++){ if(placed.some(q => q.right === right && Math.abs(q.y - ly) < 11)) ly += 11; else break; }
+    ly = Math.max(MAP_PAD.t + 10, Math.min(MAP_PAD.t + f.plotH - 3, ly));
+    placed.push({ right, y: ly });
+    return headAt(ax, ay, a.bearing, color) + `<text x="${(right ? ax - 9 : ax + 9).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${right ? 'end' : 'start'}" font-size="10" fill="${color}" ${halo}>${escapeHtml(text)}</text>`;
+  };
+  if(model.farJoin){
+    const fj = model.farJoin;
+    if(fj.seg) svg += `<line x1="${px(fj.seg.a)}" y1="${py(fj.seg.a)}" x2="${px(fj.seg.b)}" y2="${py(fj.seg.b)}" stroke="var(--text)" stroke-width="1.8" stroke-dasharray="2 5"/>`;
+    if(fj.arrow) svg += edgeLabel(fj.arrow, `next position ${fj.nm.toFixed(1)} nm`, 'var(--text)');
+    else svg += `<circle cx="${px(fj.to)}" cy="${py(fj.to)}" r="3" fill="var(--bg)" stroke="var(--text)" stroke-width="1.4"/><text x="${(px(fj.to) + 7).toFixed(1)}" y="${(py(fj.to) - 6).toFixed(1)}" font-size="10" fill="var(--text)" ${halo}>next position ${fj.nm.toFixed(1)} nm</text>`;
+  }
+  if(model.route) model.route.arrows.forEach(a => { svg += edgeLabel(a, `${a.name} ${a.distNm.toFixed(1)} nm`, 'var(--text-dim)'); });
+  // The aircraft's distance from BeyondATC's planned line (to the line extended), and the plan's first-leg direction as a violet arrow.
+  const footSeg = model.plannedLine && model.plannedLine.distNm >= 0.1 ? clipSegmentToRect({ x: 0, y: 0 }, model.plannedLine.foot, f.rect) : null;
+  if(footSeg){
+    const pl = model.plannedLine, x1 = px(footSeg.a), y1 = py(footSeg.a), x2 = px(footSeg.b), y2 = py(footSeg.b);
+    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--amber)" stroke-width="1.4" stroke-dasharray="3 3"/><text x="${((x1 + x2) / 2 + 6).toFixed(1)}" y="${((y1 + y2) / 2).toFixed(1)}" font-size="10" fill="var(--amber)" ${halo}>${pl.distNm.toFixed(1)} nm from it</text>`;
+  }
+  if(model.firstLeg && model.firstLeg.seg){
+    const fl = model.firstLeg, b = fl.seg.b, bx = px(b), by = py(b), right = bx > MAP_PAD.l + f.plotW * 0.5;
+    svg += `<line x1="${px(fl.seg.a)}" y1="${py(fl.seg.a)}" x2="${bx}" y2="${by}" stroke="var(--firstleg)" stroke-width="2.2"/>${headAt(bx, by, fl.trueDeg, 'var(--firstleg)')}<text x="${(right ? bx - 8 : bx + 8).toFixed(1)}" y="${(by + (by < MAP_PAD.t + 24 ? 14 : -4)).toFixed(1)}" text-anchor="${right ? 'end' : 'start'}" font-size="10" fill="var(--firstleg)" ${halo}>plan’s first-leg direction ${hdg3(fl.magDeg)}°M</text>`;
+  }
+  pts.forEach((p, i) => { if(i !== model.m1Index && i !== model.m2Index) svg += `<circle cx="${px(p)}" cy="${py(p)}" r="3" fill="var(--bg)" stroke="var(--text)" stroke-width="1.4" opacity="${i < model.m1Index ? 0.5 : 1}"/>`; });
+  if(model.ray){
+    const x1 = px(m1), y1 = py(m1), x2 = px(model.ray.end), y2 = py(model.ray.end);
+    const r = model.ray.trueBrg * Math.PI / 180, hx = Math.cos(r), hy = Math.sin(r), dx = Math.sin(r), dy = -Math.cos(r);
+    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--target)" stroke-width="2" stroke-dasharray="5 4"/>`
+      + `<polyline points="${(x2 - dx * 8 + hx * 4).toFixed(1)},${(y2 - dy * 8 + hy * 4).toFixed(1)} ${x2},${y2} ${(x2 - dx * 8 - hx * 4).toFixed(1)},${(y2 - dy * 8 - hy * 4).toFixed(1)}" fill="none" stroke="var(--target)" stroke-width="2"/>`
+      + `<text x="${x2 > MAP_PAD.l + f.plotW * 0.6 ? x2 - 8 : x2 + 8}" y="${y2 + (y2 < MAP_PAD.t + 24 ? 14 : -6)}" text-anchor="${x2 > MAP_PAD.l + f.plotW * 0.6 ? 'end' : 'start'}" font-size="10" fill="var(--target)" ${halo}>assigned heading ${hdg3(model.ray.spokenMag)}°M</text>`;
+  }
+  [m1, m2].forEach(p => { if(p && Number.isFinite(p.hdgTrue)) svg += arrowAt(px(p), py(p), p.hdgTrue, 20, 'var(--amber)'); });
+  svg += `<circle cx="${px(m1)}" cy="${py(m1)}" r="8" fill="${outcome}" stroke="var(--bg)" stroke-width="1.5"/><text x="${px(m1)}" y="${py(m1) + 3.5}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--bg)">1</text>`;
+  if(m2) svg += `<circle cx="${px(m2)}" cy="${py(m2)}" r="8" fill="var(--amber)" stroke="var(--bg)" stroke-width="1.5"/><text x="${px(m2)}" y="${py(m2) + 3.5}" text-anchor="middle" font-size="10" font-weight="700" fill="var(--bg)">2</text>`;
+  // North arrow (drawn from this design): a pointer with an N under it, top right of the plot.
+  const nx = MAP_W - 22, ny = MAP_PAD.t + 30;
+  svg += `<polygon points="${nx},${ny - 16} ${nx + 6},${ny + 2} ${nx},${ny - 2} ${nx - 6},${ny + 2}" fill="var(--text)"/><text x="${nx}" y="${ny + 14}" text-anchor="middle" font-size="10" fill="var(--text)">N</text>`;
+  // Scale bar: the plot corner farthest from anything drawn (bottom left when nothing competes).
+  const sb = model.scaleBar;
+  const drawnPx = pts.map(p => ({ x: px(p), y: py(p) })).concat(model.ray ? [{ x: px(model.ray.end), y: py(model.ray.end) }] : []);
+  const slot = placeScaleBar(drawnPx, sb.px + 20, 26, { x: MAP_PAD.l, y: MAP_PAD.t, w: f.plotW, h: f.plotH });
+  const sx = slot.x + 10, sy = slot.y + 18;
+  svg += `<line x1="${sx}" y1="${sy}" x2="${(sx + sb.px).toFixed(1)}" y2="${sy}" stroke="var(--text)" stroke-width="2"/><line x1="${sx}" y1="${sy - 4}" x2="${sx}" y2="${sy + 4}" stroke="var(--text)"/><line x1="${(sx + sb.px).toFixed(1)}" y1="${sy - 4}" x2="${(sx + sb.px).toFixed(1)}" y2="${sy + 4}" stroke="var(--text)"/><text x="${sx}" y="${sy - 7}" font-size="10" fill="var(--text)" ${halo}>${sb.nm} nm</text>`;
+
+  const trueOf = m => Math.round(hdgMagToTrue(m, m1.lat, m1.lon));
+  const t1 = fmtTime(m1.timeMin);
+  const altTxt = Number.isFinite(m1.alt) ? ` (${Math.round(m1.alt).toLocaleString('en-US')} ft)` : '';
+  const li1 = `At ${t1}${altTxt} ATC issued “${ex.atc.text}” and the aircraft was heading ${hdg3(m1.hdgMag)}°M.`;
+  let li2;
+  if(m2){
+    const d = distNm(m1, m2).toFixed(1);
+    li2 = (model.stretch.m2IsInstruction ? `At ${fmtTime(m2.timeMin)} the next heading instruction came; the aircraft was heading ${hdg3(m2.hdgMag)}°M, ${d} nm from the first position.`
+      : `The last recorded position joined to it is at ${fmtTime(m2.timeMin)}, heading ${hdg3(m2.hdgMag)}°M, ${d} nm from the first position.`);
+    if(model.gap) li2 += gapSentence(model);
+  } else if(model.gap){
+    li2 = `No later position is on this map.${gapSentence(model)}`;
+  } else if(model.stretch.sameStateNext){
+    li2 = 'The next heading instruction came with no new position recorded, so marker 2 would sit on marker 1.';
+  } else {
+    li2 = 'No later position was recorded before this instruction stopped applying, so there is no marker 2.';
+  }
+  const boxes = [];
+  if(model.ray) boxes.push(`<div class="hmap-box"><span>Assigned heading</span><b>${hdg3(model.ray.spokenMag)}°M</b><i>${hdg3(trueOf(model.ray.spokenMag))}° true</i></div>`);
+  boxes.push(`<div class="hmap-box"><span>Aircraft heading when issued</span><b>${hdg3(m1.hdgMag)}°M</b><i>${hdg3(m1.hdgTrue)}° true</i></div>`);
+  if(model.firstLeg) boxes.push(`<div class="hmap-box"><span>Direction of the plan’s first leg</span><b>${hdg3(model.firstLeg.magDeg)}°M</b><i>${hdg3(model.firstLeg.trueDeg)}° true · BeyondATC’s plan, not your track</i></div>`);
+  if(model.plan && model.plan.course) boxes.push(`<div class="hmap-box"><span>BeyondATC’s planned course</span><b>${hdg3(model.plan.course.magDeg)}°M</b><i>${hdg3(model.plan.course.trueDeg)}° true · to its next point; includes wind correction and intercept angle</i></div>`);
+  let planNote = '';
+  if(model.plan){
+    const gen = model.plan.generatedAt != null ? `, drawn up at about ${fmtTime(model.plan.generatedAt)}` : '';
+    planNote = model.plan.kind === 'buffer'
+      ? `<div class="hmap-note">Blue dashed: BeyondATC’s planned line${gen}. BeyondATC is steering the aircraft to a point along the first leg of that line and does not record where the point is, so only the overall line is shown.</div>`
+      : `<div class="hmap-note">Blue dashed: BeyondATC’s planned line for this instruction${gen}. The part already flown is faded. The course is shown in magnetic degrees, with true degrees beside it.</div>`;
+    // The small blue arrows on the frame mean "the plan continues out of the map this way".
+    if(model.plan.arrows.length) planNote = planNote.replace('</div>', ' Blue arrows at the edge point to parts of the planned line beyond the map.</div>');
+  }
+  if(model.firstLeg){
+    const add = ' Violet arrow: the direction of the first leg of that line, calculated here from its points. It is the line’s direction, not the aircraft’s track.';
+    planNote = planNote ? planNote.replace('</div>', add + '</div>') : `<div class="hmap-note">${escapeHtml(add.trim())}</div>`;
+  }
+  if(model.plannedLine){
+    const pl = model.plannedLine;
+    planNote += `<div class="hmap-note">Blue dashed: BeyondATC’s planned line, where it passes through this map. The arrow shows which way it runs; its course is in magnetic degrees.${pl.leg ? ' The fainter part is that line extended past the ends BeyondATC recorded.' : ' BeyondATC recorded only a short stretch of this line; what crosses the map is that line extended.'}${footSeg ? ' Amber dashed: the aircraft’s distance from it.' : ''}</div>`;
+  }
+  // BeyondATC's own path records (choice C) and the check of its "planned track" statement (choice D): each a note that begins
+  // "BeyondATC's record" or "Check of BeyondATC's statement", coloured by what BeyondATC's own log concluded, never red.
+  const recParts = pathNotes(ex, PARSED.states).map(n => `<div class="hmap-rec ${n.tone}">${escapeHtml(n.text)}</div>`);
+  const chk = offTrackCheck(ex);
+  if(chk) recParts.push(`<div class="hmap-rec blue">${offTrackCheckLines(chk).map(escapeHtml).join('<br>')}</div>`);
+  const recHtml = recParts.join('');
+  // The filed route's own note, naming only what this drawing shows. The active-leg claim is made only when the log's current fix is on the route.
+  let routeNote = '';
+  if(model.route){
+    const bits = [];
+    if(model.route.segs.length) bits.push('Grey dotted: the filed route (from the log header).');
+    if(model.route.inFixes.length) bits.push('Circles: route fixes inside this map.');
+    if(model.route.arrows.length) bits.push('Grey arrows at the edge: the nearest route fixes outside it, with their distance.');
+    const cur = ex.atc.state && ex.atc.state.currFix ? ex.atc.state.currFix.trim() : '';
+    const onRoute = cur && PARSED.routeFixes && PARSED.routeFixes.fixes.some(r => r.name.toLowerCase() === cur.toLowerCase());
+    if(onRoute) bits.push(`BeyondATC’s record has the aircraft’s current fix at this instruction as ${cur}, a fix on the filed route.`);
+    if(bits.length) routeNote = `<div class="hmap-note">${bits.map(escapeHtml).join(' ')}</div>`;
+  }
+  const aria = `Map of ${pts.length} recorded position${pts.length === 1 ? '' : 's'} around the heading instruction ${ex.atc.text}. Marker 1 is where the aircraft was at the instruction, heading ${hdg3(m1.hdgMag)} degrees magnetic.${model.ray ? ` Assigned heading ${hdg3(model.ray.spokenMag)} degrees magnetic.` : ''}${m2 ? ' Marker 2 is the last position joined to it.' : ''}${model.plan ? ' BeyondATC’s planned line is drawn.' : ''}${model.farJoin ? ` The next position, ${model.farJoin.nm.toFixed(1)} nautical miles away, is ${model.farJoin.inside ? 'joined by a dotted line' : 'off the map'}.` : ''}`;
+  return { model, aria, li1, li2, svg, boxes, planNote, routeNote, recHtml };
+}
+
+// What to say about the next position when it is far (more than GAP_NM): the close-up joins it with a dotted line that runs off the
+// map; a hop the aircraft could not have flown in the time between the two positions is never joined.
+function gapSentence(model){
+  const g = model.gap, dir = hdg3(g.state.hdgMag);
+  if(model.farJoin) return ` The next recorded position is ${g.nm.toFixed(0)} nm later, heading ${dir}°M; ${model.farJoin.inside ? 'a dotted line joins it on the map' : 'a dotted line runs off the map toward it'}.`;
+  return ` The next recorded position is ${g.nm.toFixed(0)} nm later, heading ${dir}°M, which the aircraft could not have flown in the time between the two positions, so it is not joined.`;
+}
+
+// The card's map. A card whose next position is far gets two drawings and a Close-up / Whole stretch button pair (the close-up is
+// shown first); every other card is one drawing and no buttons, as before.
+function headingMapHtml(ex){
+  const close = headingMapView(ex, 'close');
+  if(!close) return '';
+  const whole = close.model.hasFar ? headingMapView(ex, 'whole') : null;
+  const pane = v => `<svg class="hmap-svg" viewBox="0 0 ${MAP_W} ${MAP_H}" role="img" aria-label="${attrEscape(v.aria)}"><title>${escapeHtml(v.aria)}</title>${v.svg}</svg>
+      <ol class="hmap-list"><li>${escapeHtml(v.li1)}</li><li>${escapeHtml(v.li2)}</li></ol>`;
+  const views = whole
+    ? `<div class="hmap-btnbar"><button type="button" class="hmap-btn on" data-hmap-view="close" aria-pressed="true">Close-up</button><button type="button" class="hmap-btn" data-hmap-view="whole" aria-pressed="false">Whole stretch</button></div>
+      <div class="hmap-pane hmap-pane-close">${pane(close)}${close.planNote}${close.routeNote}</div>
+      <div class="hmap-pane hmap-pane-whole">${pane(whole)}${whole.planNote}${whole.routeNote}</div>`
+    : pane(close);
+  return `<div class="hmap-wrap"${whole ? ' data-view="close"' : ''}>
+      ${views}
+      <div class="hmap-strip">${close.boxes.join('')}</div>
+      ${close.recHtml}${whole ? '' : close.planNote + close.routeNote}
+      <div class="hmap-note">The straight lines between positions are guesses: BeyondATC records the aircraft’s position only when someone transmits on the radio, so the path between two positions is not known. The assigned-heading line is a heading, not the track over the ground; wind moves the real track away from it.</div>
+    </div>`;
+}
+
 function loadLeg(idx){
   currentLegIndex = idx;
   PARSED = ALL_LEGS[idx];
@@ -5203,6 +6066,8 @@ function loadLeg(idx){
   refineSpeakersByCallsign(PARSED.events, callsign);
   EXCHANGES = buildExchanges(PARSED);
   PARSED.vectorUnmatched = linkVectors(EXCHANGES, PARSED);
+  linkPlans(EXCHANGES, PARSED);
+  PARSED.pathUnmatched = linkPathRecords(EXCHANGES, PARSED);
   CFG = JSON.parse(JSON.stringify(DEFAULT_CFG));
 
   const profile = categoryProfileForType(PARSED.meta.actype);
@@ -5803,7 +6668,10 @@ function renderStrip(ex){
   // once the trio started conveying the same assigned-vs-actual relationship
   // as plain numbers for those two axes; a heading compass stays since it's
   // a genuinely different (angular) read a text trio can't replace.
-  const diagramsHtml = ex.eval.results.filter(r=>r.diagram && r.type==='HDG').map(r=>headingCompassSvg(r.diagram)).join('');
+  // The heading map (heading cards with a usable position) draws the assigned heading itself, so the compass diagram is
+  // not rendered beside it (it would show the same assigned-versus-actual relationship twice).
+  const headingMapBlock = headingMapHtml(ex);
+  const diagramsHtml = headingMapBlock ? '' : ex.eval.results.filter(r=>r.diagram && r.type==='HDG').map(r=>headingCompassSvg(r.diagram)).join('');
   const trioHeadHtml = trioGroupHtml(ex.trios, false);
   const carryoverHtml = carryoverNoteHtml(ex);
   const t = ex.atc.state ? fmtTime(ex.atc.state.timeMin) : '—';
@@ -5849,6 +6717,7 @@ function renderStrip(ex){
       ${ex.atc.rawVoice ? `<div class="rawvoice">🔊︎ "${escapeHtml(ex.atc.rawVoice)}"</div>` : ''}
       ${diagramsHtml}
       ${vectorDetail}
+      ${headingMapBlock}
       ${locationSketchHtml}
       ${trioGroupHtml(ex.otherTrios, true)}
       <div class="detail-grid">
@@ -5880,6 +6749,18 @@ function renderStrip(ex){
     div.classList.toggle('open');
     stripHead.setAttribute('aria-expanded', div.classList.contains('open') ? 'true' : 'false');
   };
+  // The map's Close-up / Whole stretch buttons (only on a card whose next position is far): switch which drawing shows.
+  div.querySelectorAll('.hmap-btn').forEach(btn => {
+    btn.addEventListener('click', ()=>{
+      const wrap = btn.closest('.hmap-wrap');
+      wrap.setAttribute('data-view', btn.getAttribute('data-hmap-view'));
+      wrap.querySelectorAll('.hmap-btn').forEach(b => {
+        const on = b === btn;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+  });
   stripHead.addEventListener('click', toggleOpen);
   stripHead.addEventListener('keydown', (e)=>{
     if(e.key==='Enter' || e.key===' ' || e.key==='Spacebar'){
@@ -5921,8 +6802,8 @@ function renderStateKV(s, dropAxes){
   if(!dropAxes || !dropAxes.has('HDG')) rows.push(`<div class="kv"><span>Heading</span><b>${Math.round(s.hdgMag)}°M${escapeHtml(rawHdgSuffix(s))}</b></div>`);
   if(!dropAxes || !dropAxes.has('SPD')) rows.push(`<div class="kv"><span>Speed (IAS)</span><b>${Math.round(s.spd)} kt</b></div>`);
   rows.push(`<div class="kv"><span>Ground speed</span><b>${Math.round(s.gs)} kt</b></div>`);
-  rows.push(`<div class="kv"><span>In vector</span><b>${s.inVector?'Yes':'No'}</b></div>`);
-  rows.push(`<div class="kv"><span>Fix</span><b>${s.currFix||'—'}</b></div>`);
+  rows.push(`<div class="kv"><span>Under radar vectors</span><b>${s.inVector?'Yes':'No'}</b></div>`);
+  rows.push(`<div class="kv"><span>Fix</span><b>${s.currFix && !/^Vector_/i.test(s.currFix) ? escapeHtml(s.currFix) : '—'}</b></div>`);
   rows.push(`<div class="kv"><span>Time</span><b>${fmtTime(s.timeMin)}</b></div>`);
   return rows.join('\n');
 }
