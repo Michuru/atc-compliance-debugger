@@ -4,6 +4,22 @@ All notable changes to this tool are recorded here, newest first. Format loosely
 
 This file is the source of truth for "what's actually been released" - update it in the same push as any new git tag, rather than relying on the working repo's `BACKLOG.md` (a separate, internal working log that isn't guaranteed to stay in sync with real tag history - see the 2026-08-17 entry below for exactly why that matters).
 
+## [1.20.1] - 2026-10-13
+
+### Fixed
+- **A "leave FIX heading" card could say "reached it in ~-3m" (a negative time).** The time is measured from the moment the aircraft leaves the fix, but the tool also counted an earlier moment when the aircraft happened to be pointing that way while still on its way to the fix. The search for "reached the heading" now starts once the fix has been left. On the sample logs the three affected cards now read "~0m" with the same colour; no other verdict changed. If the aircraft was on the heading before the fix, turned away after it and never came back, the card now reports that it ended off the assigned heading instead of "reached it".
+
+### Changed
+- **Plainer wording on every other card and panel**, following the heading card's wording in 1.20.0: "recorded" instead of "logged" or "captured", the system named (BeyondATC) where it was not, and no tool-internal terms.
+  - A missing readback reads **"Pilot did not read back"** (and "No readback needed" for an instruction that called for none), instead of "No readback captured". It means no pilot transmission was matched to the instruction in the recording.
+  - "Not independently verified from available states" now reads "not confirmed by the recorded aircraft data" (or "which this tool cannot check against the recorded aircraft data" on approach cards).
+  - Header notes say "this recording" instead of "this log"; the flight-coverage note says which end of the flight was not recorded.
+  - The count tile "Warnings" is now **"Caution"**, matching the legend and the thresholds panel.
+  - The aircraft panel under each card reads "Aircraft at the instruction" and "Aircraft at the next ATC transmission", with a "Next waypoint" row; the compass sketch spells out "magnetic".
+  - Thresholds and the category table use full words ("Approach category", "Approach speed", "Vertical speed caution", "Largest heading mismatch forgiven when cleared for the approach", "ft above the airport").
+  - A file the tool cannot read now says so in plain words first, with the browser's own message after "Details:".
+- No verdict, count or colour changed from the wording pass: across every stored log, each card keeps its check, status and colour.
+
 ## [1.20.0] - 2026-10-11
 
 ### Added

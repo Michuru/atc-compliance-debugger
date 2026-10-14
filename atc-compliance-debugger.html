@@ -320,7 +320,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
 <div id="dropzone">
   <div class="scope"><div class="pivot" aria-hidden="true"></div></div>
   <h1>BeyondATC Compliance Debugger</h1>
-  <p>Drop a Player log file (.log / .txt) to see every ATC instruction paired with what the aircraft actually did &mdash; heading, altitude, and speed compliance, flagged automatically.</p>
+  <p>Drop a BeyondATC Player.log file (.log / .txt) to see every ATC instruction paired with what the aircraft actually did &mdash; heading, altitude, and speed compliance, flagged automatically.</p>
   <label class="dropbox" id="dropbox">
     <div class="big">Click to choose a file, or drag it here</div>
     <div class="hint">Parsed entirely in your browser &mdash; nothing is uploaded anywhere</div>
@@ -342,7 +342,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
         <div class="cat-note-inline" id="hFlightNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hXpdrNote" style="display:none;"></div>
         <div class="cat-note-inline" id="hRegionNote" style="display:none;"></div>
-        <div class="header-disclaimer">Every number in this tool comes from a logged radio-activity sample, not continuous real-time tracking — gaps of a minute or more between values are normal. Any position sketch shown below is an abstract projection, not a real map — no terrain or streets.</div>
+        <div class="header-disclaimer">Every number in this tool comes from a sample BeyondATC recorded when there was radio activity, not from continuous tracking — gaps of a minute or more between values are normal. Any position sketch shown below is an abstract projection, not a real map — no terrain or streets.</div>
       </div>
       <div class="statgrid" id="hStats"></div>
       <button class="ghost" id="btnConfig">⚙︎ Thresholds</button>
@@ -376,7 +376,7 @@ main{max-width:1180px;margin:0 auto;padding:20px 24px 80px;}
       <span><span class="sw" style="background:var(--amber);width:10px;height:10px;border-radius:50%;"></span>Caution</span>
       <span><span class="sw" style="background:var(--red);width:10px;height:10px;border-radius:50%;"></span>Violation</span>
       <span><span class="badge flag" style="padding:2px 7px;">dashed</span>&nbsp;= flagged for extra review</span>
-      <span>State strip reads left→right: current reading, what was assigned, gap remaining to close</span>
+      <span>Each row of three boxes reads left to right: where the aircraft is now, what ATC assigned, and how far it still has to go</span>
     </div>
     <label for="searchBox" class="cat-note" style="display:block;">Search instruction text</label>
     <input type="text" id="searchBox" placeholder="e.g. descend, runway 27, N123AB" style="width:100%;margin:0 0 16px;">
@@ -2511,10 +2511,10 @@ function hdgToMagnetic(hdgTrue, lat, lon){
 function rawHdgSuffix(state){
   if(!state || !Number.isFinite(state.hdg)) return ''; // raw-hdg-ok
   const raw = ((Math.round(state.hdg) % 360) + 360) % 360; // raw-hdg-ok
-  return raw === state.hdgMag ? '' : ` (log ${raw}° true)`;
+  return raw === state.hdgMag ? '' : ` (recorded as ${raw}° true)`;
 }
-// The same note for use inside a bracket that already exists ("(17° off, log 90° true)"),
-// so a label never shows two brackets back to back: ", log 90° true" or ''.
+// The same note for use inside a bracket that already exists ("(17° off, recorded as 90° true)"),
+// so a label never shows two brackets back to back: ", recorded as 90° true" or ''.
 function rawHdgNote(state){
   const s = rawHdgSuffix(state);
   return s ? ', ' + s.trim().slice(1, -1) : '';
@@ -2935,8 +2935,15 @@ function evaluateExchange(ex, cfg){
     const hdgProgressStart = ex.clearance.heading.fixTriggered
       ? (fixLeftState || startState)
       : startState;
+    // A "leave FIX heading" clearance only takes effect once the aircraft
+    // leaves the fix, so the search for the first on-heading state starts
+    // there: a state before it (the aircraft was already pointing that way
+    // while still inbound) is not compliance, and made the delay below,
+    // measured from the fix, come out negative ("reached it in ~-3m").
+    const hdgSearchFrom = fixLeftState ? Math.max(0, hdgWin.indexOf(fixLeftState)) : 0;
     let compliedAt = null;
-    for(const s of hdgWin){
+    for(let i = hdgSearchFrom; i < hdgWin.length; i++){
+      const s = hdgWin[i];
       if(headingDiff(s.hdgMag, target) <= cfg.hdgTol){ compliedAt = s; break; }
     }
     const finalState = hdgWin.length ? hdgWin[hdgWin.length-1] : startState;
@@ -2989,7 +2996,7 @@ function evaluateExchange(ex, cfg){
       // legitimately turning toward a heading it hasn't reached yet.
       let worstPreCompliance = null;
       if(startState && headingDiff(startState.hdgMag, target) <= cfg.hdgTol){
-        const beforeCompliance = hdgWin.slice(0, compliedIdx).filter(s => !hasStoppedFlying(s));
+        const beforeCompliance = hdgWin.slice(hdgSearchFrom, compliedIdx).filter(s => !hasStoppedFlying(s));
         for(const s of beforeCompliance){
           const d = headingDiff(s.hdgMag, target);
           if(d > cfg.hdgTol && (!worstPreCompliance || d > headingDiff(worstPreCompliance.hdgMag, target))) worstPreCompliance = s;
@@ -3009,14 +3016,14 @@ function evaluateExchange(ex, cfg){
       if(worstDrift){
         const driftDiff = Math.round(headingDiff(worstDrift.hdgMag, target));
         if(releasedByApproach && driftDiff <= cfg.vectorReleaseTol && (preDiff==null || preReleased)){
-          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then continued turning to ${Math.round(worstDrift.hdgMag)}°${rawHdgSuffix(worstDrift)} — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
+          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then continued turning to ${Math.round(worstDrift.hdgMag)}°${rawHdgSuffix(worstDrift)} — cleared for the approach in the same instruction, likely capturing the final approach course, which this tool cannot check against the recorded aircraft data`});
         } else {
           const status = (driftDiff <= cfg.hdgTol*2 && (preDiff==null || preDiff <= cfg.hdgTol*2)) ? 'warn' : 'bad';
           results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}, then drifted to ${Math.round(worstDrift.hdgMag)}° (${driftDiff}° off${rawHdgNote(worstDrift)}) before the next instruction`});
         }
       } else if(worstPreCompliance){
         if(preReleased){
-          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote} — cleared for the approach in the same instruction, likely capturing the final course, not independently verified from available states`});
+          results.push({type:'HDG', status:'ok', label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote} — cleared for the approach in the same instruction, likely capturing the final approach course, which this tool cannot check against the recorded aircraft data`});
         } else {
           const status = preDiff <= cfg.hdgTol*2 ? 'warn' : 'bad';
           results.push({type:'HDG', status, label:`HDG ${target}° — reached it${delay!=null?` in ~${delay}m`:''}${preNote}`});
@@ -3168,7 +3175,7 @@ function evaluateExchange(ex, cfg){
         // relative to hdgProgressStart).
         const turnedMeaningfully = hdgProgressStart && headingDiff(hdgProgressStart.hdgMag, actual) > cfg.hdgTol;
         if(releasedByApproach && diff <= cfg.vectorReleaseTol && turnedMeaningfully){
-          results.push({type:'HDG', status:'ok', label:`Assigned ${target}° — cleared for the approach in the same instruction, ended up at ${actual}° (${diff}° off the vector${rawHdgNote(finalState)}) — likely capturing the final approach course, not independently verified from available states`, diagram:{target, actual, status:'ok'}});
+          results.push({type:'HDG', status:'ok', label:`Assigned ${target}° — cleared for the approach in the same instruction, ended up at ${actual}° (${diff}° off the assigned heading${rawHdgNote(finalState)}) — likely capturing the final approach course, which this tool cannot check against the recorded aircraft data`, diagram:{target, actual, status:'ok'}});
         } else {
         // A never-superseded HDG clearance running out of elapsed time
         // isn't a violation - the exact HDG-side parallel to the ALT
@@ -3251,7 +3258,7 @@ function evaluateExchange(ex, cfg){
       // since `Assigned` on the trio must keep reflecting only the real
       // ongoing target, never this compound clearance's crossing number.
       const flagLabel = `Also: cross ${crossingRestriction.fixName} at ${crossingRestriction.direction ? `or ${crossingRestriction.direction} ` : ''}${crossingRestriction.ft.toLocaleString()}ft`;
-      results.push({...(crResult || {type:'ALT', status:'ok', label:`ALT ${crossingRestriction.ft.toLocaleString()} — crossing restriction at ${crossingRestriction.fixName} (not independently verified from available states)`}), shortLabel:flagLabel, flagBadge:true});
+      results.push({...(crResult || {type:'ALT', status:'ok', label:`ALT ${crossingRestriction.ft.toLocaleString()} — crossing restriction at ${crossingRestriction.fixName} (not confirmed by the recorded aircraft data)`}), shortLabel:flagLabel, flagBadge:true});
     }
     if(vfrCeiling){
       // See parseAltitudeClearance - any altitude on the correct side of
@@ -3291,7 +3298,7 @@ function evaluateExchange(ex, cfg){
       // the ALT block (no targetFt to run compliedAt/bust logic against)
       // but still falls through to the V/S and SPD checks below, which
       // don't depend on having a target.
-      results.push({type:'ALT', status:'ok', label:`${action==='climb'?'Climb':'Descend'} via procedure — not independently verified from available states`});
+      results.push({type:'ALT', status:'ok', label:`${action==='climb'?'Climb':'Descend'} via procedure — not confirmed by the recorded aircraft data`});
     } else {
     let compliedAt = null;
     for(const s of altWin){
@@ -3569,7 +3576,7 @@ function evaluateExchange(ex, cfg){
         // the bust-check above already deliberately avoids; this extends
         // the same reasoning to this fallback instead of contradicting it.
         const crResult = evaluateCrossingRestriction(crossingRestriction, altWin, cfg);
-        results.push(crResult || {type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — crossing restriction (not independently verified from available states)`});
+        results.push(crResult || {type:'ALT', status:'ok', label:`ALT ${targetFt.toLocaleString()} — crossing restriction (not confirmed by the recorded aircraft data)`});
       } else if(ex.altSuperseded && progressing){
         // Not a violation: ATC simply issued a new altitude before this one
         // was reached, and the aircraft was correctly headed that way. The
@@ -4271,7 +4278,7 @@ function evaluateExchange(ex, cfg){
       results.push({type:'RESP', status:'warn', label:`Readback delayed ~${d}m (instruction ${fmtTime(startState.timeMin)} → readback ${fmtTime(ex.readback.state.timeMin)})`});
     }
   } else if(!ex.readback && ex.hasTarget){
-    results.push({type:'RESP', status:'warn', label:`No readback captured`});
+    results.push({type:'RESP', status:'warn', label:`Pilot did not read back`});
   }
 
   // overall
@@ -4334,7 +4341,7 @@ function evaluatePilotReport(ex, cfg){
   }
   if(worst){
     const neverCleared = ex.reportWindowEndLineIndex === Infinity;
-    const label = `Reported ready for descent — descended ${Math.round(worstDrop).toLocaleString()}ft to ${Math.round(worst.alt).toLocaleString()}ft before ATC actually cleared it${neverCleared ? ' (never cleared for the rest of this log)' : ''}`;
+    const label = `Reported ready for descent — descended ${Math.round(worstDrop).toLocaleString()}ft to ${Math.round(worst.alt).toLocaleString()}ft before ATC actually cleared it${neverCleared ? ' (never cleared for the rest of the recording)' : ''}`;
     return { results: [{type:'ALT', status:'bad', label}], overall:'bad' };
   }
   return { results: [{type:'ALT', status:'ok', label:'Reported ready for descent — held altitude until ATC cleared it'}], overall:'ok' };
@@ -4438,7 +4445,7 @@ const DEFAULT_CFG = {
   // real-log complaint was a 1kt overage, not a 9kt one, and a hard-limit
   // check should stay closer to zero tolerance than a target-drift check.
   speedLimitTol: {v:5, label:'Hard speed-limit tolerance (250kt/Class B checks)', unit:'kt'},
-  approachAltThreshold: {v:1000, label:'"On approach" altitude', unit:'ft AGL~'},
+  approachAltThreshold: {v:1000, label:'"On approach" altitude', unit:'ft above the airport'},
   approachSpeedLimit: {v:180, label:'Approach speed target', unit:'kt'},
   landingSpeedLimit: {v:160, label:'Landing-clearance speed target', unit:'kt'},
   // Checked in the same 2026-08-11 JO 7110.65 skim - no matching citation
@@ -4458,7 +4465,7 @@ const DEFAULT_CFG = {
   // it only forgives genuine localizer/course capture, not a materially
   // different outcome (see the Ryanair 15XV 160°-off case this deliberately
   // does NOT cover, immediately below).
-  vectorReleaseTol: {v:90, label:'Vector-release angle (cleared for the approach)', unit:'°'}
+  vectorReleaseTol: {v:90, label:'Largest heading mismatch forgiven when cleared for the approach', unit:'°'}
 };
 
 // FAA Pilot/Controller Glossary AIRCRAFT APPROACH CATEGORY bands (based on
@@ -5357,7 +5364,7 @@ function vectorDetailLines(vector, afterDeviation){
     if(vi.reason === 'Replan' && afterDeviation) lines.push('An earlier card in this leg notes that BeyondATC saw the aircraft off its heading.');
   }
   (vector.engine || []).forEach(g => {
-    const at = Number.isFinite(g.hdgT) ? ' (aircraft heading ' + vecDeg(g.hdgT) + ' true in its log)' : '';
+    const at = Number.isFinite(g.hdgT) ? ' (aircraft heading ' + vecDeg(g.hdgT) + ' true as recorded)' : '';
     if(g.ncKind === 'queried') lines.push('BeyondATC asked about the heading after seeing the aircraft off its assigned heading' + at + '.');
     else if(g.ncKind === 'outerShell') lines.push('The aircraft went past BeyondATC’s outer limit for this heading, and BeyondATC took over to generate new vectors' + at + '.');
     else if(g.ncKind === 'hold') lines.push('BeyondATC paused its routine headings for this aircraft' + at + '.');
@@ -6018,7 +6025,7 @@ function headingMapView(ex, mode){
   let routeNote = '';
   if(model.route){
     const bits = [];
-    if(model.route.segs.length) bits.push('Grey dotted: the filed route (from the log header).');
+    if(model.route.segs.length) bits.push('Grey dotted: the filed route (from the recording’s header).');
     if(model.route.inFixes.length) bits.push('Circles: route fixes inside this map.');
     if(model.route.arrows.length) bits.push('Grey arrows at the edge: the nearest route fixes outside it, with their distance.');
     const cur = ex.atc.state && ex.atc.state.currFix ? ex.atc.state.currFix.trim() : '';
@@ -6072,7 +6079,7 @@ function loadLeg(idx){
 
   const profile = categoryProfileForType(PARSED.meta.actype);
   if(profile){
-    const tag = `Cat ${profile.category} · ${PARSED.meta.actype}`;
+    const tag = `Category ${profile.category} · ${PARSED.meta.actype}`;
     CFG.approachSpeedLimit.v = profile.approach;
     CFG.approachSpeedLimit.label = `Approach speed target (${tag})`;
     CFG.landingSpeedLimit.v = profile.landing;
@@ -6096,8 +6103,8 @@ function loadLeg(idx){
     catNote.style.display = 'block';
     const what = PARSED.meta.actype
       ? `Aircraft type "${PARSED.meta.actype}" isn't in the category table`
-      : `No aircraft type found in this log`;
-    catNote.innerHTML = `⚠︎ ${what} — using flat default thresholds, not tuned to this aircraft.<button type="button" class="link" id="hCatNoteLink">View category reference</button>`;
+      : `No aircraft type found in this recording`;
+    catNote.innerHTML = `⚠︎ ${what} — using general thresholds that do not depend on aircraft type, not tuned to this aircraft.<button type="button" class="link" id="hCatNoteLink">View category reference</button>`;
     document.getElementById('hCatNoteLink').addEventListener('click', ()=>{
       document.getElementById('configPanel').classList.add('open');
       document.getElementById('categoryTable').scrollIntoView({behavior:'smooth', block:'center'});
@@ -6147,9 +6154,9 @@ function loadLeg(idx){
   if(departureVectors) procParts.push(`Departure: Radar vectors to ${departureVectors.fix}, then as filed`);
   else if(cpdlcDeparture && cpdlcDeparture.type==='vectors') procParts.push(`Departure: Radar vectors after departure (CPDLC), rwy ${cpdlcDeparture.runway}`);
   else if(cpdlcDeparture && cpdlcDeparture.type==='sid') procParts.push(`Departure: SID ${cpdlcDeparture.name}${cpdlcDeparture.runway ? `, rwy ${cpdlcDeparture.runway}` : ''} (CPDLC)`);
-  else if(vectoredProc.sid) procParts.push(`Departure: no SID computed, rwy ${vectoredProc.sid.runway} (vectored)`);
+  else if(vectoredProc.sid) procParts.push(`Departure: BeyondATC had no SID for rwy ${vectoredProc.sid.runway} (radar vectors)`);
   else if(assignedProc.sid) procParts.push(`Departure: SID ${assignedProc.sid.name}, rwy ${assignedProc.sid.runway}`);
-  if(vectoredProc.star) procParts.push(`Arrival: no STAR computed, rwy ${vectoredProc.star.runway} (vectored)`);
+  if(vectoredProc.star) procParts.push(`Arrival: BeyondATC had no STAR for rwy ${vectoredProc.star.runway} (radar vectors)`);
   else if(assignedProc.star) procParts.push(`Arrival: STAR ${assignedProc.star.name}, rwy ${assignedProc.star.runway}`);
   if(assignedApproach){
     const kindLabel = assignedApproach.kind ? `${assignedApproach.kind} approach` : 'Cleared to land';
@@ -6201,7 +6208,7 @@ function loadLeg(idx){
 
   PARSED.meta.fieldElevations = deriveFieldElevations(PARSED.states);
   if(PARSED.meta.fieldElevations.arrival != null){
-    CFG.approachAltThreshold.label = `"On approach" altitude (AGL, field ~${Math.round(PARSED.meta.fieldElevations.arrival)}ft)`;
+    CFG.approachAltThreshold.label = `"On approach" altitude (airport elevation ~${Math.round(PARSED.meta.fieldElevations.arrival)}ft)`;
   }
   // A log doesn't have to cover gate-to-gate - BeyondATC recording can
   // start after the aircraft is already airborne (mid-cruise) or stop
@@ -6225,11 +6232,11 @@ function loadLeg(idx){
     // instead, which is accurate whether the cutoff is mid-descent or
     // mid-rollout.
     const what = noDeparture && noArrival
-      ? "captures neither end of the flight - recording began after takeoff and stopped before the aircraft came to a stop"
+      ? "has neither end of the flight - it began after takeoff and stopped before the aircraft came to a stop"
       : noDeparture
-        ? 'starts mid-flight - no departure/ground state was captured (recording began after takeoff)'
-        : 'ends before the aircraft came to a stop - no arrival/ground state was captured';
-    flightNote.innerHTML = `⚠︎ This log ${what}.`;
+        ? 'starts mid-flight - the departure on the ground was not recorded (it began after takeoff)'
+        : 'ends before the aircraft came to a stop - the arrival on the ground was not recorded';
+    flightNote.innerHTML = `⚠︎ This recording ${what}.`;
   }
   // Flight-wide header alert, not a per-exchange badge - there's no single
   // ATC instruction to attach a forgotten squawk to, unlike HDG/ALT/SPD
@@ -6243,7 +6250,7 @@ function loadLeg(idx){
     xpdrNote.style.display = 'block';
     const what = xpdrAlert.turnedOnTime != null
       ? `stayed Off from liftoff (~${fmtTime(xpdrAlert.liftoffTime)}) until ~${fmtTime(xpdrAlert.turnedOnTime)}`
-      : `stayed Off from liftoff (~${fmtTime(xpdrAlert.liftoffTime)}) and was never confirmed On for the rest of this log`;
+      : `stayed Off from liftoff (~${fmtTime(xpdrAlert.liftoffTime)}) and was never recorded On for the rest of the recording`;
     xpdrNote.innerHTML = `⚠︎ Transponder ${what} — check for a missed squawk after takeoff.`;
   }
   PARSED.meta.topOfClimbLineIndex = deriveTopOfClimbLineIndex(PARSED.states, PARSED.meta.cruiseAlt);
@@ -6257,15 +6264,15 @@ function loadLeg(idx){
   if(guessedRegion){
     const fromIcao = m.orig || m.dest;
     routeParts.push(guessedRegion==='unmodeled'
-      ? `apparent region: unmodeled (${fromIcao})`
-      : `<span title="Guessed from ${fromIcao}'s country - BeyondATC's actual region setting isn't logged, this is inferred from airport location only.">apparent region: ${guessedRegion} (${fromIcao})</span>`);
+      ? `apparent region: not covered by this tool's rules (${fromIcao})`
+      : `<span title="Guessed from ${fromIcao}'s country - BeyondATC does not record its actual region setting, so this is inferred from airport location only.">apparent region: ${guessedRegion} (${fromIcao})</span>`);
     // The "unmodeled" case is the one that actually needs to change how the
     // user reads this tool's output (extra caution on every compliance
     // judgment below), so it gets a visible line rather than a hover-only
     // title - same treatment as hCatNote/hFlightNote/hXpdrNote above.
     if(guessedRegion==='unmodeled'){
       regionNote.style.display = 'block';
-      regionNote.innerHTML = `⚠︎ Guessed from ${fromIcao}'s country — BeyondATC's actual region setting isn't logged, and this tool's own compliance rules are modeled on US FAA/JO 7110.65 phraseology (VFR or IFR alike) — so treat compliance judgments here with extra caution.`;
+      regionNote.innerHTML = `⚠︎ Guessed from ${fromIcao}'s country — BeyondATC does not record its actual region setting, and this tool's own compliance rules follow US FAA JO 7110.65 phraseology (VFR or IFR alike) — so treat compliance judgments here with extra caution.`;
     } else {
       regionNote.style.display = 'none';
       regionNote.innerHTML = '';
@@ -6277,7 +6284,7 @@ function loadLeg(idx){
   if(m.orig && m.dest) routeParts.push(`${m.orig} <b>${m.origrwy?('rwy '+m.origrwy+' '):''}</b>→ ${m.dest} <b>${m.destrwy?('rwy '+m.destrwy):''}</b>`);
   if(m.actype) routeParts.push(`${m.actype}`);
   if(m.cruiseAlt) routeParts.push(`FL${Math.round(m.cruiseAlt/100)}`);
-  document.getElementById('hRoute').innerHTML = routeParts.join(' &nbsp;·&nbsp; ') || 'Route info not found in log';
+  document.getElementById('hRoute').innerHTML = routeParts.join(' &nbsp;·&nbsp; ') || 'Route info not found in this recording';
 
   // Quick access to the SimBrief flight plan this log was generated from,
   // plus a copyable route string for pasting into Navigraph Charts - only
@@ -6393,13 +6400,13 @@ function buildCategoryTable(){
   const actype = PARSED.meta.actype ? PARSED.meta.actype.toUpperCase() : null;
   const currentCat = actype ? AIRCRAFT_APPROACH_CATEGORY[actype] : null;
   const note = !actype
-    ? 'Aircraft type not found in this log - using flat defaults above.'
+    ? 'Aircraft type not found in this recording - using the general thresholds above.'
     : currentCat
       ? `Detected type: ${actype} → Category ${currentCat}.`
-      : `Detected type: ${actype} - not in the category table below, using flat defaults above.`;
+      : `Detected type: ${actype} - not in the category table below, using the general thresholds above.`;
   const rows = ['A','B','C','D','E'].map(cat=>{
     const p = CATEGORY_PERFORMANCE[cat];
-    const examples = (CATEGORY_EXAMPLES[cat]||[]).join(', ') || '(none in this table - defined for any future type that genuinely qualifies)';
+    const examples = (CATEGORY_EXAMPLES[cat]||[]).join(', ') || '(no aircraft types listed yet)';
     return `<tr class="${cat===currentCat?'current':''}">
       <td>${cat}</td>
       <td class="examples">${examples}</td>
@@ -6415,8 +6422,8 @@ function buildCategoryTable(){
     <div class="cat-table-wrap">
       <table class="cat-table">
         <thead><tr>
-          <th>Cat</th><th>Example types</th><th>Approach</th><th>Landing</th>
-          <th>Min climb/descent</th><th>VS caution</th><th>VS violation</th>
+          <th>Approach category</th><th>Example types</th><th>Approach speed</th><th>Landing speed</th>
+          <th>Min climb/descent rate</th><th>Vertical speed caution</th><th>Vertical speed violation</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -6512,14 +6519,14 @@ function headingCompassSvg({target, actual, status, actualLabel='actual'}){
   return `<div class="mini-diagram">
     <svg width="80" height="80" viewBox="0 0 80 80">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="1.5"/>
-      <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dim)">N (mag)</text>
+      <text x="${cx}" y="10" text-anchor="middle" font-size="8" fill="var(--text-dim)">N (magnetic)</text>
       <line x1="${cx}" y1="${cy}" x2="${tx}" y2="${ty}" stroke="var(--target)" stroke-width="2" stroke-dasharray="3,2"/>
       <line x1="${cx}" y1="${cy}" x2="${ax}" y2="${ay}" stroke="${color}" stroke-width="2.5"/>
       <circle cx="${cx}" cy="${cy}" r="1.6" fill="var(--text)"/>
     </svg>
     <div class="mini-diagram-legend">
-      <span style="color:var(--target)">┄ assigned ${target}°M</span>
-      <span style="color:${color}">━ ${actualLabel} ${actual}°M</span>
+      <span style="color:var(--target)">┄ assigned ${target}° magnetic</span>
+      <span style="color:${color}">━ ${actualLabel} ${actual}° magnetic</span>
     </div>
   </div>`;
 }
@@ -6709,7 +6716,7 @@ function renderStrip(ex){
              suppressed entirely for isPilotReport self-reports) - only its
              location moved, not what it shows or when. -->
         ${ex.readback ? `<div class="readback"><span class="who">${pilotLabel(ex.readback)}</span>${ex.readback.state ? `<span class="rb-time">${fmtTime(ex.readback.state.timeMin)}</span>` : ''}${escapeHtml(ex.readback.text)}</div>` : (ex.isPilotReport ? '' :
-          (ex.hasTarget ? `<div class="readback missing">No readback captured</div>` : `<div class="readback missing-expected">No readback captured (none expected)</div>`))}
+          (ex.hasTarget ? `<div class="readback missing">Pilot did not read back</div>` : `<div class="readback missing-expected">No readback needed</div>`))}
       </div>
       <div class="strip-chevron">▶</div>
     </div>
@@ -6722,8 +6729,8 @@ function renderStrip(ex){
       ${trioGroupHtml(ex.otherTrios, true)}
       <div class="detail-grid">
         <div class="detail-col">
-          <h4>Aircraft state at instruction</h4>
-          ${ex.atc.state ? renderStateKV(ex.atc.state, coveredAxes) : '<div class="kv">No state captured</div>'}
+          <h4>Aircraft at the instruction</h4>
+          ${ex.atc.state ? renderStateKV(ex.atc.state, coveredAxes) : '<div class="kv">No aircraft data recorded</div>'}
         </div>
         <div class="detail-col">
           <!-- Renamed from "State at end of response window" (2026-09-05) -
@@ -6737,9 +6744,9 @@ function renderStrip(ex){
                disagree when other ATC chatter falls in between - this is
                what triggered a real user's "196 vs 190, what does response
                window even mean?" confusion reading Player bad vector.log. -->
-          <h4>State at next ATC transmission</h4>
+          <h4>Aircraft at the next ATC transmission</h4>
           <div class="cat-note" style="margin-top:-4px;">Not necessarily the same window the compliance badge above was graded against - this is a short snapshot at the very next ATC transmission of any kind.</div>
-          ${ex.windowStates.length ? renderStateKV(ex.windowStates[ex.windowStates.length-1]) : '<div class="kv">No further data</div>'}
+          ${ex.windowStates.length ? renderStateKV(ex.windowStates[ex.windowStates.length-1]) : '<div class="kv">No further aircraft data recorded</div>'}
         </div>
       </div>
     </div>
@@ -6803,7 +6810,7 @@ function renderStateKV(s, dropAxes){
   if(!dropAxes || !dropAxes.has('SPD')) rows.push(`<div class="kv"><span>Speed (IAS)</span><b>${Math.round(s.spd)} kt</b></div>`);
   rows.push(`<div class="kv"><span>Ground speed</span><b>${Math.round(s.gs)} kt</b></div>`);
   rows.push(`<div class="kv"><span>Under radar vectors</span><b>${s.inVector?'Yes':'No'}</b></div>`);
-  rows.push(`<div class="kv"><span>Fix</span><b>${s.currFix && !/^Vector_/i.test(s.currFix) ? escapeHtml(s.currFix) : '—'}</b></div>`);
+  rows.push(`<div class="kv"><span>Next waypoint</span><b>${s.currFix && !/^Vector_/i.test(s.currFix) ? escapeHtml(s.currFix) : '—'}</b></div>`);
   rows.push(`<div class="kv"><span>Time</span><b>${fmtTime(s.timeMin)}</b></div>`);
   return rows.join('\n');
 }
@@ -6839,7 +6846,7 @@ function renderStats(){
   const statDef = [
     {filter:'all', cls:'', n:counts.total, l:'Instructions'},
     {filter:'ok', cls:'ok', n:counts.ok, l:'Compliant'},
-    {filter:'warn', cls:'warn', n:counts.warn, l:'Warnings'},
+    {filter:'warn', cls:'warn', n:counts.warn, l:'Caution'},
     {filter:'bad', cls:'bad', n:counts.bad, l:'Violations'},
   ];
   stats.innerHTML = statDef.map(s=>
@@ -6870,7 +6877,7 @@ function render(){
 function drawChart(){
   const host = document.getElementById('chartHost');
   const states = PARSED.states;
-  if(!states.length){ host.innerHTML='<p style="color:var(--text-dim)">No PlayerState data found.</p>'; return; }
+  if(!states.length){ host.innerHTML='<p style="color:var(--text-dim)">No aircraft position or speed data was recorded in this file.</p>'; return; }
 
   const W = Math.max(900, states.length*3.2), H = 260, padL=54, padR=54, padT=10, padB=24;
   const maxAlt = Math.max(...states.map(s=>s.alt), 1000)*1.08;
@@ -6977,7 +6984,7 @@ function handleFile(file){
       try{
         initApp(reader.result);
       }catch(err){
-        document.getElementById('parseError').textContent = 'Could not parse this file: '+err.message+' — confirm this is an unedited BeyondATC Player.log file.';
+        document.getElementById('parseError').textContent = 'Could not read this file. Confirm it is an unedited BeyondATC Player.log file. Details: '+err.message;
         console.error(err);
       } finally {
         if(bigEl && originalBig!=null) bigEl.textContent = originalBig;
