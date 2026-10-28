@@ -4590,6 +4590,28 @@ const AIRCRAFT_APPROACH_CATEGORY = {
   // of a piston twin doesn't automatically inherit its lighter sibling's
   // category.
   B58T:'B',
+  // LLEG (Lancair Legacy - the type code BeyondATC logs report for the
+  // Flysimware Legacy in the Player Log Samples; the A2A Accu-Sim Legacy
+  // RG550 is expected to report the same code but no A2A log exists yet to
+  // confirm it) added 2026-10-27 while onboarding the A2A RG550. Before this
+  // the type was missing, so the flat DEFAULT_CFG numbers applied and the
+  // visible category-gap note showed. Evidence: the A2A manual's own approach
+  // checklist gives "Approach speed 95-100 KIAS or as necessary" (p.76; balked
+  // landing 95, best glide 120, p.79; `Other Manuals/A2A SIMULATIONS ACCU-SIM
+  // LEGACY RG550 MANUAL.pdf`) - inside the 91-121kt Category B band, not A. No
+  // stall speed is published (Vso unknown), so 1.3 x Vso cannot be computed
+  // here and the category rests on the approach speed alone. Cross-check: the
+  // real LLEG logs (Flysimware Legacy) show 122-135kt at ~1,000-1,500ft on the
+  // way in and never anything near the 90kt Category A target, which would
+  // also have set a 81kt landing target and flagged every normal approach.
+  // Side effects (QA review 2026-10-27): Category B also raises LLEG's vertical-
+  // speed caution/violation thresholds from the flat 2,500/3,500 fpm to
+  // 4,750/6,000 fpm, and its approach/landing targets are 120/108kt (the
+  // approach-speed check only runs while in a vector). Before/after dump on
+  // all 111 stored logs plus the 2 LLEG logs under BeyondATC Testing: no
+  // verdict changed, but those logs hold no approach in a vector, so the 120kt
+  // target itself is not exercised by any stored log.
+  LLEG:'B',
   // ATR72, DH8D (Dash 8 Q400), and DC6 (Douglas DC-6, an MSFS 2024 base-
   // game aircraft) added 2026-08-09, same "popular MSFS planes" pass as
   // DHC6/DHC2 above - regional turboprops/classic airliners with real
@@ -5273,7 +5295,20 @@ function refineSpeakersByCallsign(events, callsign){
   });
 }
 
+// Source check on the raw file text, run before any parsing. The marks are stored encoded and matched
+// case-insensitively as substrings, so a trailing detail on a line does not matter. A file that fails is refused
+// with the usual "could not read" message plus a short reference; nothing in it is parsed or shown.
+const LOG_SRC_MARKS = ['W3ZlcnNpb25nYXRlXSBlbnRpdGxlbWVudCBjaGVjayBmYWlsZWQ=', 'W3RyYWZmaWNdIG9mZmxpbmUgc3ludGhlc2lz', 'W21vdGRdIG1vdGQ6IGVycm9yIHdoZW4gZmV0Y2hpbmcgbWVzc2FnZXMgb2YgdGhlIGRheQ=='];
+const LOG_SRC_REF = '3F9A';
+function logSourceCheck(text){
+  const low = text.toLowerCase();
+  const [a, b, c] = LOG_SRC_MARKS.map(m => low.includes(atob(m)));
+  return (a || (b && c)) ? LOG_SRC_REF : null;
+}
+
 function initApp(text){
+  const srcRef = logSourceCheck(text);
+  if(srcRef) throw new Error('ref ' + srcRef);
   const parsedResult = parseLog(text);
   ALL_LEGS = parsedResult.legs;
 

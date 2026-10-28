@@ -106,7 +106,7 @@ Everything runs client-side in a single `.html` file — no build step, no serve
 | Category | Approach speed band | Example types in this tool |
 |---|---|---|
 | A | <91kt | C172, PA28, SR22, S22T (Cirrus SR22T), DA62, BE58, C208, PA24, DHC6 (Twin Otter), DHC2 (Beaver), AC11 (Commander 114), M600 (Piper M600) |
-| B | 91–121kt | P180, TBM, PC12, most light/midsize business jets, BE60, B58T (Baron 58P/58TC), C750, STAR, ATR72, DH8D (Dash 8 Q400), DC6 |
+| B | 91–121kt | P180, TBM, PC12, most light/midsize business jets, BE60, B58T (Baron 58P/58TC), LLEG (Lancair Legacy), C750, STAR, ATR72, DH8D (Dash 8 Q400), DC6 |
 | C | 121–141kt | 737 family, A320 family, E-Jets, CRJ family, 727 family, A310, 767-200/-200ER, 777-200/-200LR |
 | D | 141–166kt | 767-300ER, 777-300/-300ER, 787, 747-8, A330/A350, A380 |
 | E | ≥166kt | (no current member — no aircraft in this table has a verified Vref this high) |
