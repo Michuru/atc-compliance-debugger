@@ -6,6 +6,8 @@ This file is the source of truth for "what's actually been released" - update it
 
 ## [Unreleased]
 
+## [1.20.2] - 2026-10-28
+
 ### Added
 - **The Lancair Legacy (type code LLEG) now has an approach category: B.** Before, the type was missing from the table, so the general thresholds applied, with a warning in the header that they were not tuned to the aircraft. Category B (approach speed 91 to 121 kt) fits the aircraft's own published approach speed of 95 to 100 KIAS; Category A would have flagged every normal approach. Across every stored log, no verdict, count or colour changed. Category B also raises this type's vertical-speed caution and violation limits from the flat 2,500 and 3,500 fpm to 4,750 and 6,000 fpm.
 
